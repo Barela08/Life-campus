@@ -669,33 +669,104 @@ const videoRef = useRef<HTMLVideoElement>(null)
       <div className="h-[calc(100vh-3.5rem)] flex flex-col lg:flex-row gap-4 -m-4 lg:-m-6 p-4 lg:p-6">
         {/* Left: Camera */}
         <div className="flex-1 flex flex-col gap-3 min-h-0">
-          <div
+<div
             ref={cameraBoxRef}
             className="relative flex-1 rounded-2xl overflow-hidden bg-black border border-gray-200 dark:border-gray-800 min-h-[300px]"
           >
-            {capturing ? (
-              <>
-                <video
-                  ref={videoRef}
-                  autoPlay
-                  playsInline
-                  muted
-                  className="absolute inset-0 w-full h-full object-cover"
-                  onLoadedMetadata={() => {
-                    cameraService.attachVideo(videoRef.current)
-                    setDebugInfo(d => ({
-                      ...d,
-                      resolution: videoRef.current?.videoWidth ? `${videoRef.current.videoWidth}×${videoRef.current.videoHeight}` : d.resolution,
-                      videoWidth: videoRef.current?.videoWidth || 0,
-                      videoHeight: videoRef.current?.videoHeight || 0,
-                    }))
-                  }}
-                />
-                {!live && (
-                  <div className="absolute inset-0 flex items-center justify-center bg-black/40 text-gray-200 text-sm">
-                    <Loader size={20} className="animate-spin mr-2" /> Starting live preview…
+            {/*
+              The <video> element is ALWAYS rendered so videoRef.current is always
+              valid and the MediaStream can be bound at any time — including when
+              the stream was created before this element mounted. This eliminates
+              the black-screen race. State/error/overlay UI is layered on top.
+            */}
+            <video
+              ref={videoRef}
+              autoPlay
+              playsInline
+              muted
+              className="absolute inset-0 w-full h-full object-cover"
+              onLoadedMetadata={() => {
+                cameraService.attachVideo(videoRef.current)
+                setDebugInfo(d => ({
+                  ...d,
+                  resolution: videoRef.current?.videoWidth ? `${videoRef.current.videoWidth}×${videoRef.current.videoHeight}` : d.resolution,
+                  videoWidth: videoRef.current?.videoWidth || 0,
+                  videoHeight: videoRef.current?.videoHeight || 0,
+                }))
+              }}
+            />
+            {capturing && !live && (
+              <div className="absolute inset-0 flex items-center justify-center bg-black/50 text-gray-200 text-sm">
+                <Loader size={20} className="animate-spin mr-2" /> Starting live preview…
+              </div>
+            )}
+            {!capturing && (
+              <div className="absolute inset-0 w-full h-full flex flex-col items-center justify-center text-gray-500 p-6 bg-black">
+                {cameraState === 'opening' ? (
+                  <div className="text-center">
+                    <div className="w-16 h-16 mx-auto rounded-2xl bg-primary-500/10 flex items-center justify-center mb-4">
+                      <Loader className="animate-spin text-primary-500" size={32} />
+                    </div>
+                    <p className="text-base font-medium text-gray-300">Opening camera...</p>
+                    <p className="text-sm text-gray-500 mt-1">Please allow camera access when prompted</p>
+                  </div>
+                ) : cameraState === 'denied' ? (
+                  <div className="text-center max-w-sm">
+                    <div className="w-16 h-16 mx-auto rounded-2xl bg-red-500/10 flex items-center justify-center mb-4">
+                      <CameraOff size={32} className="text-red-500" />
+                    </div>
+                    <p className="text-base font-medium text-gray-300">Camera Permission Denied</p>
+                    <p className="text-sm text-gray-500 mt-1 mb-4">Allow camera access in your browser settings and click Refresh Camera.</p>
+                    <button onClick={retryCamera} className="btn-primary flex items-center gap-2 mx-auto">
+                      <RefreshCw size={16} /> Refresh Camera
+                    </button>
+                  </div>
+                ) : cameraState === 'busy' ? (
+                  <div className="text-center max-w-sm">
+                    <div className="w-16 h-16 mx-auto rounded-2xl bg-amber-500/10 flex items-center justify-center mb-4">
+                      <Camera size={32} className="text-amber-500" />
+                    </div>
+                    <p className="text-base font-medium text-gray-300">Camera Busy</p>
+                    <p className="text-sm text-gray-500 mt-1 mb-4">The camera is in use by another application. Close it and click Refresh Camera.</p>
+                    <button onClick={retryCamera} className="btn-primary flex items-center gap-2 mx-auto">
+                      <RefreshCw size={16} /> Refresh Camera
+                    </button>
+                  </div>
+                ) : cameraState === 'notfound' ? (
+                  <div className="text-center max-w-sm">
+                    <div className="w-16 h-16 mx-auto rounded-2xl bg-gray-500/10 flex items-center justify-center mb-4">
+                      <CameraOff size={32} />
+                    </div>
+                    <p className="text-base font-medium text-gray-300">No Camera Found</p>
+                    <p className="text-sm text-gray-500 mt-1 mb-4">Connect a camera and click Refresh Camera.</p>
+                    <button onClick={retryCamera} className="btn-primary flex items-center gap-2 mx-auto">
+                      <RefreshCw size={16} /> Refresh Camera
+                    </button>
+                  </div>
+                ) : cameraState === 'error' && cameraError ? (
+                  <div className="text-center max-w-sm">
+                    <div className="w-16 h-16 mx-auto rounded-2xl bg-red-500/10 flex items-center justify-center mb-4">
+                      <AlertTriangle size={32} className="text-red-500" />
+                    </div>
+                    <p className="text-base font-medium text-gray-300">Camera Error</p>
+                    <p className="text-sm text-gray-500 mt-1 mb-4">{cameraError}</p>
+                    <button onClick={retryCamera} className="btn-primary flex items-center gap-2 mx-auto">
+                      <RefreshCw size={16} /> Refresh Camera
+                    </button>
+                  </div>
+                ) : (
+                  <div className="text-center">
+                    <div className="w-16 h-16 mx-auto rounded-2xl bg-gray-500/10 flex items-center justify-center mb-4">
+                      <Camera size={32} />
+                    </div>
+                    <p className="text-base font-medium text-gray-300">Camera Off</p>
+                    <p className="text-sm text-gray-500 mt-1">Click Enable Camera to start</p>
                   </div>
                 )}
+              </div>
+            )}
+{capturing && (
+              <>
                 {/* Scan overlay */}
                 {scanning && (
                   <div className="absolute inset-0 pointer-events-none">
@@ -783,70 +854,6 @@ const videoRef = useRef<HTMLVideoElement>(null)
                   </div>
                 )}
               </>
-            ) : (
-              <div className="w-full h-full flex flex-col items-center justify-center text-gray-500 p-6">
-                {cameraState === 'opening' ? (
-                  <div className="text-center">
-                    <div className="w-16 h-16 mx-auto rounded-2xl bg-primary-500/10 flex items-center justify-center mb-4">
-                      <Loader className="animate-spin text-primary-500" size={32} />
-                    </div>
-                    <p className="text-base font-medium text-gray-300">Opening camera...</p>
-                    <p className="text-sm text-gray-500 mt-1">Please allow camera access when prompted</p>
-                  </div>
-                ) : cameraState === 'denied' ? (
-                  <div className="text-center max-w-sm">
-                    <div className="w-16 h-16 mx-auto rounded-2xl bg-red-500/10 flex items-center justify-center mb-4">
-                      <CameraOff size={32} className="text-red-500" />
-                    </div>
-                    <p className="text-base font-medium text-gray-300">Camera Permission Denied</p>
-                    <p className="text-sm text-gray-500 mt-1 mb-4">Allow camera access in your browser settings and try again.</p>
-                    <button onClick={retryCamera} className="btn-primary flex items-center gap-2 mx-auto">
-                      <RefreshCw size={16} /> Retry Camera
-                    </button>
-                  </div>
-                ) : cameraState === 'busy' ? (
-                  <div className="text-center max-w-sm">
-                    <div className="w-16 h-16 mx-auto rounded-2xl bg-amber-500/10 flex items-center justify-center mb-4">
-                      <Camera size={32} className="text-amber-500" />
-                    </div>
-                    <p className="text-base font-medium text-gray-300">Camera Busy</p>
-                    <p className="text-sm text-gray-500 mt-1 mb-4">The camera is in use by another application. Close it and retry.</p>
-                    <button onClick={retryCamera} className="btn-primary flex items-center gap-2 mx-auto">
-                      <RefreshCw size={16} /> Retry Camera
-                    </button>
-                  </div>
-                ) : cameraState === 'notfound' ? (
-                  <div className="text-center max-w-sm">
-                    <div className="w-16 h-16 mx-auto rounded-2xl bg-gray-500/10 flex items-center justify-center mb-4">
-                      <CameraOff size={32} />
-                    </div>
-                    <p className="text-base font-medium text-gray-300">No Camera Found</p>
-                    <p className="text-sm text-gray-500 mt-1 mb-4">Connect a camera and click retry.</p>
-                    <button onClick={retryCamera} className="btn-primary flex items-center gap-2 mx-auto">
-                      <RefreshCw size={16} /> Retry Camera
-                    </button>
-                  </div>
-                ) : cameraState === 'error' && cameraError ? (
-                  <div className="text-center max-w-sm">
-                    <div className="w-16 h-16 mx-auto rounded-2xl bg-red-500/10 flex items-center justify-center mb-4">
-                      <AlertTriangle size={32} className="text-red-500" />
-                    </div>
-                    <p className="text-base font-medium text-gray-300">Camera Error</p>
-                    <p className="text-sm text-gray-500 mt-1 mb-4">{cameraError}</p>
-                    <button onClick={retryCamera} className="btn-primary flex items-center gap-2 mx-auto">
-                      <RefreshCw size={16} /> Retry Camera
-                    </button>
-                  </div>
-                ) : (
-                  <div className="text-center">
-                    <div className="w-16 h-16 mx-auto rounded-2xl bg-gray-500/10 flex items-center justify-center mb-4">
-                      <Camera size={32} />
-                    </div>
-                    <p className="text-base font-medium text-gray-300">Camera Off</p>
-                    <p className="text-sm text-gray-500 mt-1">Click Enable Camera to start</p>
-                  </div>
-                )}
-              </div>
             )}
           </div>
 
