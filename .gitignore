@@ -1,0 +1,44 @@
+# ===== Secrets & Environment =====
+backend/.env
+.env
+*.env.local
+
+# ===== Python =====
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# ===== Node =====
+node_modules/
+dist/
+*.tsbuildinfo
+
+# ===== Database =====
+*.db
+*.sqlite
+*.sqlite3
+
+# ===== Logs =====
+*.log
+backend/*.log
+frontend/*.log
+
+# ===== Uploads / Data =====
+backend/uploads/*
+!backend/uploads/.gitkeep
+backend/data/*
+!backend/data/.gitkeep
+backend/exports/*
+
+# ===== IDE =====
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ===== OS =====
+.DS_Store
+Thumbs.db
