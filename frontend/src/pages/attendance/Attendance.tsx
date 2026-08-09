@@ -11,8 +11,13 @@ import {
   Fingerprint, Calendar, Clock, Ban, Shield, AlertCircle, CheckCircle,
   Activity, Layers, ArrowLeft, RotateCcw, Eye, EyeOff
 } from 'lucide-react'
+import { cameraService, attachCameraVideo, CameraState } from '../../lib/camera'
 
-type CameraState = 'off' | 'opening' | 'on' | 'error' | 'denied' | 'busy' | 'notfound'
+const OVERLAY_DURATION = 4500 // ms — 4–5 second show rule
+const SCAN_INTERVAL = 1200 // ms between recognition requests
+const UNKNOWN_COOLDOWN = 5000 // ms before the same unknown face re-triggers
+
+type OverlayKind = 'success' | 'duplicate' | 'unknown' | 'wrong_class' | null
 
 function DebugRow({ label, value, good }: { label: string; value: string; good?: boolean }) {
   return (
@@ -35,6 +40,7 @@ export default function Attendance() {
   const [sessionStatus, setSessionStatus] = useState('')
   const [records, setRecords] = useState<any[]>([])
   const [capturing, setCapturing] = useState(false)
+  const [live, setLive] = useState(false)
   const [scanning, setScanning] = useState(false)
   const [paused, setPaused] = useState(false)
   const [loading, setLoading] = useState(true)
@@ -43,8 +49,8 @@ export default function Attendance() {
   const [cameraList, setCameraList] = useState<MediaDeviceInfo[]>([])
   const [activeCameraId, setActiveCameraId] = useState<string>('')
   const [networkStatus, setNetworkStatus] = useState<'online' | 'offline'>('online')
-  const [lastRecognition, setLastRecognition] = useState<any>(null)
-  const [lastUnknown, setLastUnknown] = useState<any>(null)
+  const [overlay, setOverlay] = useState<OverlayKind>(null)
+  const [overlayData, setOverlayData] = useState<any>(null)
   const [currentTime, setCurrentTime] = useState(new Date())
   const [isFullscreen, setIsFullscreen] = useState(false)
   const [lowLight, setLowLight] = useState(false)
@@ -53,8 +59,7 @@ export default function Attendance() {
   const [loginLoading, setLoginLoading] = useState(false)
   const [cameraError, setCameraError] = useState('')
   const [faceCount, setFaceCount] = useState(0)
-const [cameraFps, setCameraFps] = useState(0)
-  const [fpsHistory, setFpsHistory] = useState<number[]>([])
+  const [cameraFps, setCameraFps] = useState(0)
   // ---- Debug panel ----
   const [debugOpen, setDebugOpen] = useState(false)
   const [debugInfo, setDebugInfo] = useState({
@@ -73,12 +78,12 @@ const [cameraFps, setCameraFps] = useState(0)
     streamActive: false,
   })
 
-  const videoRef = useRef<HTMLVideoElement>(null)
-  const streamRef = useRef<MediaStream | null>(null)
+const videoRef = useRef<HTMLVideoElement>(null)
   const cameraBoxRef = useRef<HTMLDivElement>(null)
   const scanLoopRef = useRef<number | null>(null)
-  const reconnectRef = useRef<number | null>(null)
-  const watchdogRef = useRef<number | null>(null)
+  const overlayTimerRef = useRef<number | null>(null)
+  const lastUnknownRef = useRef<number>(0)
+  const recognLockRef = useRef(false)
   const lastFrameRef = useRef<number>(0)
   const frameCountRef = useRef<number>(0)
   const fpsIntervalRef = useRef<number | null>(null)
@@ -107,6 +112,17 @@ const [cameraFps, setCameraFps] = useState(0)
     return () => document.removeEventListener('fullscreenchange', onFs)
   }, [])
 
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      cameraService.setCallbacks({})
+      cameraService.stopCamera()
+      if (overlayTimerRef.current) clearTimeout(overlayTimerRef.current)
+      if (scanLoopRef.current) clearTimeout(scanLoopRef.current)
+      if (fpsIntervalRef.current) clearInterval(fpsIntervalRef.current)
+    }
+  }, [])
+
   // Load metadata for the selector
   const load = async () => {
     setLoading(true)
@@ -133,134 +149,71 @@ const [cameraFps, setCameraFps] = useState(0)
       .catch(() => {})
   }, [departmentId, classId])
 
-  // ---- Camera management ----
-  const stopAllTracks = useCallback(() => {
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach(t => { t.onended = null; t.stop() })
-      streamRef.current = null
+  // ---- Camera management (delegates to shared cameraService) ----
+  const openCamera = useCallback(async (deviceId?: string) => {
+    cameraService.setCallbacks({
+      onStateChange: (state, err) => {
+        setCameraState(state)
+        setCameraError(err || '')
+        setCapturing(state === 'on')
+        setDebugInfo(d => ({
+          ...d,
+          permission: state === 'denied' ? 'denied' : state === 'on' ? 'granted' : d.permission,
+          streamActive: state === 'on',
+          lastError: err || '-',
+          selectedCamera: cameraService.getStream()?.getVideoTracks()[0]?.label || d.selectedCamera,
+        }))
+      },
+      onLive: (l) => {
+        setLive(l)
+        if (l) setCameraError('')
+      },
+      onStreamReady: (stream) => {
+        setDebugInfo(d => ({
+          ...d,
+          permission: 'granted',
+          selectedCamera: stream.getVideoTracks()[0]?.label || d.selectedCamera,
+          streamActive: true,
+          lastError: '-',
+        }))
+      },
+    })
+    cameraService.attachVideo(videoRef.current)
+    cameraService.startLiveMonitor()
+    const ok = await cameraService.startCamera(deviceId)
+    if (!ok) {
+      setCameraState(cameraService.getState())
+      setCameraError(cameraService.getError())
+      setCapturing(false)
     }
-    if (videoRef.current) videoRef.current.srcObject = null
-    setCapturing(false)
-    if (fpsIntervalRef.current) { clearInterval(fpsIntervalRef.current); fpsIntervalRef.current = null }
   }, [])
 
-const attachStream = useCallback((s: MediaStream) => {
-    streamRef.current = s
-    setDebugInfo(d => ({
-      ...d,
-      permission: 'granted',
-      selectedCamera: s.getVideoTracks()[0]?.label || d.selectedCamera,
-      streamActive: true,
-      lastError: '-',
-    }))
-    // Attach immediately if video is already mounted
-    if (videoRef.current) {
-      videoRef.current.srcObject = s
-      videoRef.current.play().catch(() => {})
+  // Ensure stream is attached once the video mounts (black-screen race fix)
+  useEffect(() => {
+    if (capturing) {
+      cameraService.attachVideo(videoRef.current)
     }
-    setCapturing(true)
-    setCameraState('on')
-    setCameraError('')
-    lastFrameRef.current = Date.now()
-    frameCountRef.current = 0
-    // FPS counter
+  }, [capturing, live])
+
+  // Re-attach + start FPS after camera becomes live
+  useEffect(() => {
+    if (!live) return
     if (fpsIntervalRef.current) clearInterval(fpsIntervalRef.current)
     fpsIntervalRef.current = window.setInterval(() => {
       setCameraFps(frameCountRef.current)
       frameCountRef.current = 0
     }, 1000)
-    refreshCameras()
-  }, [])
-
-  // Ensure the stream is always attached to the video element once it mounts.
-  // This fixes the race where the <video> renders AFTER attachStream stores the
-  // stream (videoRef.current is null at that moment -> black screen with LED on).
-  useEffect(() => {
-    if (videoRef.current && streamRef.current) {
-      videoRef.current.srcObject = streamRef.current
-      videoRef.current.play().catch(() => {})
-    }
-  }, [capturing, cameraState])
-
-  const openCamera = useCallback(async (deviceId?: string) => {
-    if (!navigator.mediaDevices?.getUserMedia) {
-      setCameraState('notfound')
-      setCameraError('Camera not supported in this browser')
-      toast.error('Camera not supported in this browser')
-      return
-    }
-    stopAllTracks()
-    setCameraState('opening')
-    setCameraError('')
-try {
-      // First enumerate devices
-      await refreshCameras()
-      
-      // ROOT-CAUSE FIX: avoid strict facingMode + {exact} deviceId which cause
-      // OverconstrainedError/NotReadableError on many machines. Use ideal
-      // constraints and fall back to minimal constraints if the browser rejects.
-      const videoConstraints: MediaTrackConstraints = {
-        width: { ideal: 1280 },
-        height: { ideal: 720 },
-        facingMode: 'user',
-      }
-      if (deviceId) {
-        videoConstraints.deviceId = deviceId
-      }
-      let s: MediaStream
-      try {
-        s = await navigator.mediaDevices.getUserMedia({ video: videoConstraints, audio: false })
-      } catch (err: any) {
-        const name = err?.name || ''
-        if (name === 'OverconstrainedError' || name === 'NotReadableError' || name === 'NotFoundError') {
-          // Fallback: minimal constraints (no facingMode, no ideal sizes)
-          s = await navigator.mediaDevices.getUserMedia({
-            video: deviceId ? { deviceId: { exact: deviceId } } : true,
-            audio: false,
-          })
-        } else {
-          throw err
-        }
-      }
-      attachStream(s)
-      // Monitor track ended -> reconnect
-      s.getVideoTracks()[0]?.addEventListener('ended', () => {
-        setCameraState('off')
-        scheduleReconnect()
-      })
-    } catch (err: any) {
-      const name = err?.name || ''
-      let msg = 'Failed to open camera'
-      if (name === 'NotAllowedError' || name === 'PermissionDeniedError') {
-        setCameraState('denied')
-        msg = 'Camera permission denied. Allow access in browser settings and retry.'
-      } else if (name === 'NotFoundError' || name === 'OverconstrainedError') {
-        setCameraState('notfound')
-        msg = 'No camera found. Connect a camera and retry.'
-      } else if (name === 'NotReadableError' || name === 'TrackStartError') {
-        setCameraState('busy')
-        msg = 'Camera is busy or in use by another app. Close other apps and retry.'
-      } else {
-        setCameraState('error')
-        msg = `Camera error: ${err.message || name || 'Unknown error'}`
-      }
-      setCameraError(msg)
-      toast.error(msg)
-    }
-  }, [attachStream, stopAllTracks])
+  }, [live])
 
   const refreshCameras = async () => {
-    try {
-      const devices = await navigator.mediaDevices.enumerateDevices()
-      setCameraList(devices.filter(d => d.kind === 'videoinput'))
-    } catch {}
+    const devices = await cameraService.refreshCamera()
+    setCameraList(devices)
+    return devices
   }
 
-// Initial camera enumeration
+  // Initial camera enumeration
   useEffect(() => {
-    navigator.mediaDevices?.enumerateDevices?.()
-      .then(devices => setCameraList(devices.filter(d => d.kind === 'videoinput')))
-      .catch(() => {})
+    cameraService.refreshCamera().then(setCameraList).catch(() => {})
   }, [])
 
   // Debug panel: check backend connectivity + mediaDevices support
@@ -271,38 +224,22 @@ try {
       .catch(() => setDebugInfo(d => ({ ...d, backend: 'offline' })))
   }, [])
 
-  const scheduleReconnect = useCallback(() => {
-    if (reconnectRef.current) return
-    reconnectRef.current = window.setTimeout(() => {
-      reconnectRef.current = null
-      if (sessionId) openCamera(activeCameraId || undefined)
-    }, 2000)
-  }, [openCamera, sessionId, activeCameraId])
-
-  // Watchdog: ensure stream is producing frames (never freeze)
+  // Update resolution + low-light + lastFrameRef on each rendered frame
   useEffect(() => {
-    if (cameraState !== 'on') return
-    watchdogRef.current = window.setInterval(() => {
-      const now = Date.now()
-      if (now - lastFrameRef.current > 4000) {
-        setCameraState('off')
-        setCameraError('Camera stream stalled — reconnecting...')
-        openCamera(activeCameraId || undefined)
-      }
-    }, 3000)
-    return () => { if (watchdogRef.current) clearInterval(watchdogRef.current) }
-  }, [cameraState, openCamera, activeCameraId])
-
-  // Update lastFrameRef on each video frame
-  useEffect(() => {
-    if (!videoRef.current || cameraState !== 'on') return
+    if (!live) return
     const tick = () => {
-      lastFrameRef.current = Date.now()
-      frameCountRef.current++
-      // brightness detection
-      try {
-        const v = videoRef.current!
-        if (v.videoWidth) {
+      const v = videoRef.current
+      if (v && v.videoWidth) {
+        lastFrameRef.current = Date.now()
+        frameCountRef.current++
+        setDebugInfo(d => ({
+          ...d,
+          resolution: `${v.videoWidth}×${v.videoHeight}`,
+          videoWidth: v.videoWidth,
+          videoHeight: v.videoHeight,
+        }))
+        // brightness detection
+        try {
           const c = document.createElement('canvas')
           c.width = 64; c.height = 64
           const ctx = c.getContext('2d')!
@@ -312,19 +249,18 @@ try {
           for (let i = 0; i < data.length; i += 4) sum += (data[i] + data[i + 1] + data[i + 2]) / 3
           const avg = sum / (64 * 64)
           setLowLight(avg < 40)
-        }
-      } catch {}
+        } catch {}
+      }
       requestAnimationFrame(tick)
     }
     const raf = requestAnimationFrame(tick)
     return () => cancelAnimationFrame(raf)
-  }, [cameraState])
+  }, [live])
 
   const switchCamera = useCallback(async () => {
-    await refreshCameras()
-    const vids = cameraList
+    const vids = await refreshCameras()
     if (vids.length === 0) { toast('No cameras available', { icon: '📷' }); return }
-    const current = streamRef.current?.getVideoTracks()[0]?.getSettings().deviceId
+    const current = cameraService.getStream()?.getVideoTracks()[0]?.getSettings().deviceId
     const idx = current ? vids.findIndex(d => d.deviceId === current) : -1
     const next = vids[(idx + 1) % vids.length]
     if (next) {
@@ -333,7 +269,7 @@ try {
     } else {
       toast('Only one camera detected', { icon: '📷' })
     }
-  }, [cameraList, openCamera])
+  }, [openCamera])
 
   const toggleFullscreen = () => {
     if (!document.fullscreenElement) {
@@ -343,11 +279,21 @@ try {
     }
   }
 
+// ---- Overlay management (4–5 second auto-dismiss) ----
+  const showOverlay = useCallback((kind: OverlayKind, data: any) => {
+    setOverlay(kind)
+    setOverlayData(data)
+    if (overlayTimerRef.current) clearTimeout(overlayTimerRef.current)
+    overlayTimerRef.current = window.setTimeout(() => {
+      setOverlay(null)
+      setOverlayData(null)
+    }, OVERLAY_DURATION)
+  }, [])
+
   // ---- Session ----
   const startSession = async () => {
     if (!departmentId || !classId) { toast.error('Select department and class'); return }
     if (user?.role !== 'teacher') {
-      // Show login popup, then auto-start after login
       pendingStartRef.current = true
       setShowLogin(true)
       return
@@ -384,11 +330,9 @@ try {
         setLoginLoading(false)
         return
       }
-      // Update auth state so the UI knows the user is logged in
       await authLogin(loginUser.username, loginUser.password)
       setShowLogin(false)
       toast.success('Logged in successfully')
-      // Auto-start the session after login (no need to click Start again)
       if (pendingStartRef.current) {
         pendingStartRef.current = false
         await doStartSession()
@@ -400,14 +344,15 @@ try {
     }
   }
 
+  // ---- Recognition (request-locked, throttled) ----
   const scan = useCallback(async () => {
-    if (!videoRef.current || !sessionId) return
-    const canvas = document.createElement('canvas')
-    const video = videoRef.current
-    if (!video.videoWidth) return
-    canvas.width = video.videoWidth; canvas.height = video.videoHeight
-    canvas.getContext('2d')!.drawImage(video, 0, 0)
-const b64 = canvas.toDataURL('image/jpeg', 0.8)
+    if (!sessionId || !live || paused || recognLockRef.current) return
+    if (!cameraService.isFrameReady()) return
+
+    const b64 = cameraService.captureFrame()
+    if (!b64) return
+
+    recognLockRef.current = true
     setScanning(true)
     setDebugInfo(d => ({ ...d, recognition: 'scanning', lastFrameSent: new Date().toLocaleTimeString() }))
     try {
@@ -423,6 +368,23 @@ const b64 = canvas.toDataURL('image/jpeg', 0.8)
         lastRecognitionTime: new Date().toLocaleTimeString(),
         lastError: '-',
       }))
+
+      if (d.matched && d.wrong_class) {
+        // Wrong class — do NOT mark attendance
+        showOverlay('wrong_class', { student: d.student, message: d.message })
+        toast.custom(
+          <div className="flex items-center gap-3 bg-amber-600 text-white px-5 py-3 rounded-2xl shadow-2xl shadow-amber-600/30">
+            <Ban size={20} />
+            <div>
+              <p className="font-semibold text-sm">{d.student}</p>
+              <p className="text-xs opacity-80">Student belongs to another class — not marked</p>
+            </div>
+          </div>,
+          { duration: 2500 }
+        )
+        return
+      }
+
       if (d.matched) {
         const rec = {
           student: d.student,
@@ -436,9 +398,8 @@ const b64 = canvas.toDataURL('image/jpeg', 0.8)
           duplicate: d.duplicate,
           status: d.duplicate ? 'duplicate' : 'present'
         }
-        setLastRecognition(rec)
-        setLastUnknown(null)
         if (d.duplicate) {
+          showOverlay('duplicate', rec)
           toast.custom(
             <div className="flex items-center gap-3 bg-amber-600 text-white px-5 py-3 rounded-2xl shadow-2xl shadow-amber-600/30">
               <CheckCircle2 size={20} />
@@ -450,6 +411,7 @@ const b64 = canvas.toDataURL('image/jpeg', 0.8)
             { duration: 2500 }
           )
         } else {
+          showOverlay('success', rec)
           toast.success(
             <div className="flex items-center gap-3">
               <UserCheck size={20} />
@@ -463,16 +425,35 @@ const b64 = canvas.toDataURL('image/jpeg', 0.8)
           await loadRecords()
         }
       } else {
-        setLastRecognition(null)
-        setLastUnknown({ reason: d.reason || 'Unknown face detected', confidence: d.confidence })
+        // Unknown face — cooldown so it doesn't re-trigger every frame
+        const now = Date.now()
+        if (now - lastUnknownRef.current > UNKNOWN_COOLDOWN) {
+          lastUnknownRef.current = now
+          showOverlay('unknown', { reason: d.reason || 'Unknown face detected', confidence: d.confidence })
+          toast.custom(
+            <div className="flex items-center gap-3 bg-red-600 text-white px-5 py-3 rounded-2xl shadow-2xl shadow-red-600/30">
+              <AlertTriangle size={20} />
+              <div>
+                <p className="font-semibold text-sm">Unknown Face</p>
+                <p className="text-xs opacity-80">Face not recognized — attendance NOT marked</p>
+              </div>
+            </div>,
+            { duration: 2500 }
+          )
+        }
       }
-    } catch { /* ignore transient */ } finally { setScanning(false) }
-  }, [sessionId])
+    } catch {
+      // ignore transient errors
+    } finally {
+      recognLockRef.current = false
+      setScanning(false)
+    }
+  }, [sessionId, live, paused, showOverlay])
 
   const runScanLoop = useCallback(() => {
-    if (sessionId && capturing && !paused && !scanning) scan()
-    scanLoopRef.current = window.setTimeout(runScanLoop, 1200)
-  }, [sessionId, capturing, paused, scanning, scan])
+    if (sessionId && capturing && !paused) scan()
+    scanLoopRef.current = window.setTimeout(runScanLoop, SCAN_INTERVAL)
+  }, [sessionId, capturing, paused, scan])
 
   useEffect(() => {
     runScanLoop()
@@ -502,13 +483,12 @@ const b64 = canvas.toDataURL('image/jpeg', 0.8)
     try {
       await api.post(`/attendance/stop/${sessionId}`, {})
       setSessionStatus('closed')
-      stopAllTracks()
-      setCapturing(false); setCameraState('off')
+      cameraService.stopCamera()
+      setCapturing(false); setLive(false); setCameraState('off')
       toast.success('Session closed. Absentees marked.')
       setSelectorOpen(true); setSessionId(null)
       setRecords([])
-      setLastRecognition(null)
-      setLastUnknown(null)
+      setOverlay(null); setOverlayData(null)
     } catch (err: any) {
       toast.error(err.response?.data?.detail || 'Failed to close')
     }
@@ -520,8 +500,14 @@ const b64 = canvas.toDataURL('image/jpeg', 0.8)
 
   const markedCount = records.length
   const presentCount = records.filter((r: any) => r.status === 'present').length
-  const camBadge = cameraState === 'on' ? 'green' : cameraState === 'opening' ? 'yellow' : 'red'
-  const camLabel = cameraState === 'on' ? 'Live' : cameraState === 'opening' ? 'Opening…' : cameraState.toUpperCase()
+  const camBadge = cameraState === 'on' && live ? 'green' : cameraState === 'on' ? 'yellow' : cameraState === 'opening' ? 'yellow' : 'red'
+  const camLabel = cameraState === 'on' && live
+    ? 'LIVE'
+    : cameraState === 'on'
+    ? 'Connecting…'
+    : cameraState === 'opening'
+    ? 'Opening…'
+    : cameraState.toUpperCase()
 
   // ---- Render ----
   const loginGate = showLogin && (
@@ -660,7 +646,6 @@ const b64 = canvas.toDataURL('image/jpeg', 0.8)
                 )}
               </div>
 
-              {/* Camera preview */}
               {cameraList.length > 0 && (
                 <div className="border-t border-gray-200 dark:border-gray-800 p-4 bg-gray-50/50 dark:bg-gray-800/50">
                   <div className="flex items-center gap-3 text-xs text-gray-500 dark:text-gray-400">
@@ -690,17 +675,14 @@ const b64 = canvas.toDataURL('image/jpeg', 0.8)
           >
             {capturing ? (
               <>
-<video
+                <video
                   ref={videoRef}
                   autoPlay
                   playsInline
                   muted
                   className="absolute inset-0 w-full h-full object-cover"
                   onLoadedMetadata={() => {
-                    if (videoRef.current && streamRef.current) {
-                      videoRef.current.srcObject = streamRef.current
-                      videoRef.current.play().catch(() => {})
-                    }
+                    cameraService.attachVideo(videoRef.current)
                     setDebugInfo(d => ({
                       ...d,
                       resolution: videoRef.current?.videoWidth ? `${videoRef.current.videoWidth}×${videoRef.current.videoHeight}` : d.resolution,
@@ -709,6 +691,11 @@ const b64 = canvas.toDataURL('image/jpeg', 0.8)
                     }))
                   }}
                 />
+                {!live && (
+                  <div className="absolute inset-0 flex items-center justify-center bg-black/40 text-gray-200 text-sm">
+                    <Loader size={20} className="animate-spin mr-2" /> Starting live preview…
+                  </div>
+                )}
                 {/* Scan overlay */}
                 {scanning && (
                   <div className="absolute inset-0 pointer-events-none">
@@ -747,42 +734,52 @@ const b64 = canvas.toDataURL('image/jpeg', 0.8)
                   {isFullscreen ? <Minimize2 size={18} /> : <Maximize2 size={18} />}
                 </button>
 
-                {/* Last recognition card */}
-                {lastRecognition && (
+                {/* Result overlay (auto-dismisses after 4–5s) */}
+                {overlay && (
                   <div
                     className={`absolute bottom-4 left-4 right-16 p-4 rounded-2xl backdrop-blur-lg transition-all duration-500 ${
-                      lastRecognition.status === 'duplicate'
-                        ? 'bg-amber-500/85 text-white shadow-2xl shadow-amber-500/20'
-                        : 'bg-emerald-500/85 text-white shadow-2xl shadow-emerald-500/20'
+                      overlay === 'success' ? 'bg-emerald-500/90 text-white shadow-2xl shadow-emerald-500/20'
+                      : overlay === 'duplicate' ? 'bg-amber-500/90 text-white shadow-2xl shadow-amber-500/20'
+                      : overlay === 'wrong_class' ? 'bg-amber-600/90 text-white shadow-2xl shadow-amber-600/20'
+                      : 'bg-red-500/90 text-white shadow-2xl shadow-red-500/20'
                     }`}
                   >
-                    <div className="flex items-center gap-3">
-                      <div className="w-11 h-11 rounded-xl bg-white/20 flex items-center justify-center shrink-0">
-                        {lastRecognition.status === 'duplicate' ? <CheckCircle2 size={22} /> : <UserCheck size={22} />}
+                    {overlay === 'wrong_class' ? (
+                      <div className="flex items-center gap-3">
+                        <div className="w-11 h-11 rounded-xl bg-white/20 flex items-center justify-center shrink-0"><Ban size={22} /></div>
+                        <div className="min-w-0 flex-1">
+                          <p className="font-bold text-base truncate">{overlayData?.student}</p>
+                          <p className="text-xs opacity-90 truncate mt-0.5">Student belongs to another class — attendance NOT marked</p>
+                        </div>
                       </div>
-                      <div className="min-w-0 flex-1">
-                        <p className="font-bold text-base truncate">{lastRecognition.full_name || lastRecognition.student}</p>
-                        <p className="text-xs opacity-90 truncate flex items-center gap-2 mt-0.5">
-                          {lastRecognition.status === 'duplicate' ? (
-                            <><CheckCircle2 size={12} /> Attendance Already Recorded</>
-                          ) : (
-                            <><UserCheck size={12} /> Present • {(lastRecognition.confidence * 100).toFixed(0)}% match</>
-                          )}
-                        </p>
+                    ) : overlay === 'unknown' ? (
+                      <div className="flex items-center gap-3">
+                        <div className="w-11 h-11 rounded-xl bg-white/20 flex items-center justify-center shrink-0"><AlertTriangle size={22} /></div>
+                        <div className="min-w-0 flex-1">
+                          <p className="font-bold text-base">Unknown Face</p>
+                          <p className="text-xs opacity-90 truncate mt-0.5">Face not recognized — attendance NOT marked</p>
+                        </div>
                       </div>
-                      {lastRecognition.time && (
-                        <span className="text-xs opacity-70 shrink-0">{lastRecognition.time}</span>
-                      )}
-                    </div>
-                  </div>
-                )}
-                {!lastRecognition && lastUnknown && (
-                  <div className="absolute bottom-4 left-4 right-16 p-4 rounded-2xl backdrop-blur-lg bg-red-500/85 text-white shadow-2xl shadow-red-500/20 flex items-center gap-3">
-                    <AlertTriangle size={20} />
-                    <div>
-                      <p className="font-semibold text-sm">Unknown Face</p>
-                      <p className="text-xs opacity-80">{lastUnknown.reason}</p>
-                    </div>
+                    ) : (
+                      <div className="flex items-center gap-3">
+                        <div className="w-11 h-11 rounded-xl bg-white/20 flex items-center justify-center shrink-0">
+                          {overlay === 'duplicate' ? <CheckCircle2 size={22} /> : <UserCheck size={22} />}
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <p className="font-bold text-base truncate">{overlayData?.full_name || overlayData?.student}</p>
+                          <p className="text-xs opacity-90 truncate flex items-center gap-2 mt-0.5">
+                            {overlay === 'duplicate' ? (
+                              <><CheckCircle2 size={12} /> Attendance Already Recorded</>
+                            ) : (
+                              <><UserCheck size={12} /> Present • {(overlayData?.confidence * 100).toFixed(0)}% match</>
+                            )}
+                          </p>
+                        </div>
+                        {overlayData?.time && (
+                          <span className="text-xs opacity-70 shrink-0">{overlayData.time}</span>
+                        )}
+                      </div>
+                    )}
                   </div>
                 )}
               </>
@@ -900,7 +897,7 @@ const b64 = canvas.toDataURL('image/jpeg', 0.8)
                 <Monitor size={16} /> Fullscreen
               </button>
             </div>
-<div className="flex items-center gap-2 text-sm">
+            <div className="flex items-center gap-2 text-sm">
               <ScanFace className="text-primary-400" size={18} />
               <span className="text-gray-500 dark:text-gray-400">
                 Recognition: <b className={scanning ? 'text-primary-400' : 'text-gray-400'}>
@@ -929,6 +926,7 @@ const b64 = canvas.toDataURL('image/jpeg', 0.8)
                 <DebugRow label="Resolution" value={debugInfo.resolution} />
                 <DebugRow label="FPS" value={`${cameraFps}`} />
                 <DebugRow label="Stream Active" value={debugInfo.streamActive ? 'Yes' : 'No'} good={debugInfo.streamActive} />
+                <DebugRow label="Video Live" value={live ? 'Yes' : 'No'} good={live} />
                 <DebugRow label="Backend" value={debugInfo.backend} good={debugInfo.backend === 'online'} />
                 <DebugRow label="Recognition" value={debugInfo.recognition} />
                 <DebugRow label="Last Frame Sent" value={debugInfo.lastFrameSent} />

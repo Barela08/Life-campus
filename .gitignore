@@ -25,6 +25,7 @@ dist/
 *.log
 backend/*.log
 frontend/*.log
+frontend/*.txt
 
 # ===== Uploads / Data =====
 backend/uploads/*

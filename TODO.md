@@ -1,48 +1,45 @@
-# LifeOS Smart Campus - Implementation TODO
+# Life Campus — Fix Plan
 
-## Backend ✅
-- [x] Enhance `email_service.py` - professional HTML template for attendance_marked (student + parent email, roll no, dept, course, semester, class, subject, teacher, date, time, status, current %, monthly %), retry logic
-- [x] Add low attendance (75%) warning email + notification in `face.py`
-- [x] Add AuditLog entries for attendance success/failure/unknown/spoof in `face.py`
-- [x] Rewrite `face.py` cleanly with enriched match response (full student/session details)
+## Steps
 
-## Frontend ✅
-- [x] Update `App.tsx` - `/` renders Attendance module as default landing page, `/attendance` also works; `*` redirects to `/`
-- [x] Rewrite `Attendance.tsx` camera system - robust getUserMedia, permission/busy/notfound handling, camera switching, auto-reconnect, loading state, never-freeze watchdog, low-light detection, fullscreen, login gate for non-teacher
-- [x] Add multi-angle face registration capture (front/left/right/up/down/smile/neutral) to `AdminFace.tsx`
-- [x] Add live attendance showing student details, confidence, time in `Attendance.tsx`
-- [x] Add scanline/pulse-ring animations to `tailwind.config.js`
+- [x] Step 1: Analyze codebase
+- [x] Step 2: Improve shared camera service (`camera.ts`) — added `onLive` callback, `isLive()`, `startLiveMonitor()`, `stopLiveMonitor()`, `getVideo()`
+- [x] Step 3: Refactor Attendance.tsx — use shared camera, accurate LIVE status, overlays, cooldowns, request-lock
+- [x] Step 4: Refactor StudentFace.tsx — use shared camera service
+- [x] Step 5: Update backend/.env.example with SMTP placeholders
+- [x] Step 6: Run TypeScript checks (`tsc --noEmit` EXITCODE=0)
+- [x] Step 7: Start backend + frontend
+- [x] Step 8: Test camera, registration, recognition, attendance, email
+- [x] Step 9: Fix any runtime issues
+- [x] Step 10: Final verification
 
-## Section Flow (Department → Class → Section) ✅
-- [x] `section` field in Student model, StudentCreate/Update/Out schemas
-- [x] `create_student` in admin.py now persists `section` on student creation
-- [x] Student update (PUT) persists `section` via exclude_unset
-- [x] Admin Students.tsx: interface + form field + save payload include `section`
-- [x] StartSessionRequest = {department_id, class_id, section, camera_id} (no subject)
-- [x] TeacherAttendance.tsx: Department → Class → Section dropdown flow
-- [x] face.py `/match` filters known faces by session department/class/section
-- [x] teacher.py `/sections`, attendance.py `/meta/sections` return distinct sections
-- [x] DB migration confirms students.section & attendance_sessions.section columns exist
+## What was fixed
 
-## Camera Root-Cause Fix (Black Screen) ✅
-- [x] Replaced strict `facingMode:'environment'` + `{exact: deviceId}` constraints (cause of `OverconstrainedError`/`NotReadableError`) with permissive `ideal` constraints + `facingMode:'user'`
-- [x] Added automatic fallback retry with minimal constraints if the primary `getUserMedia` call is rejected
-- [x] Keeping the video-attach race fix (stream re-attached once `<video>` mounts) and never-freeze watchdog
+### Shared camera service (`frontend/src/lib/camera.ts`)
+- Added `onLive` callback + `isLive()` (accurate LIVE detection: `stream.active && video.readyState>=2 && videoWidth>0`)
+- Added `startLiveMonitor()` / `stopLiveMonitor()` / `getVideo()` helpers
+- Existing: start/stop/refresh/switch/reconnect, watchdog (stall detection), track-ended reconnect, permission/busy/notfound/unsupported error mapping
 
-## Verification
-- [x] Backend restarted (uvicorn port 8000) - health 200, face_engine face_recognition
-- [x] Frontend running (vite port 5173) - `/` and `/attendance` return 200
-- [x] TypeScript check EXIT=0 after section changes (TSC_EXIT=0)
-- [x] Admin login (admin/1234) returns 200 with JWT
-- [x] Admin dashboard returns 200 with real data (2 students, 2 teachers, 3 depts, 2 classes, 2 subjects)
-- [x] Audit logs endpoint returns 200
-- [x] TypeScript check EXIT=0 (no errors)
-- [x] Python syntax check PASSES (face.py, email_service.py)
-- [x] No runtime errors in backend.err.log / frontend.err.log
-- [x] `npm run build` succeeds (vite production build, BUILD EXIT CODE: 0)
-- [x] Backend app imports OK; face engine = `face_recognition` (graceful fallback, insightface not installed)
-- [x] E2E face match with no registered faces -> returns "No registered faces for selected class/section" (guard works)
-- [x] FULL E2E pipeline: register face -> approve -> match -> **John Doe matched, confidence 1.0, present marked**
-- [x] Duplicate prevention E2E: second match -> **"Attendance Already Recorded"** (duplicate=True)
-- [x] Session stop -> marks present/absent, returns 200
-- [x] Frontend proxy to backend verified (5173 `/api/attendance/meta/departments` -> 3 departments)
+### Attendance terminal (`frontend/src/pages/attendance/Attendance.tsx`)
+- Delegates all camera management to the shared `cameraService` (single reliable implementation)
+- **Accurate `● CAMERA LIVE`** status based on the video actually rendering frames (not merely stream attached)
+- **Overlay auto-dismiss** after 4.5s for success / duplicate / unknown / wrong-class — then returns to scanning
+- **Wrong-class handling**: "Student belongs to another class — attendance NOT marked" (was previously treated as Present)
+- **Unknown-face cooldown** (5s) so it doesn't re-trigger on every frame
+- **Request-lock** (`recognLockRef`) prevents overlapping recognition requests
+- Throttled scanning (1.2s interval), keeps live list, debug panel, login gate, fullscreen, low-light
+
+### Student face registration (`frontend/src/pages/student/StudentFace.tsx`)
+- Uses shared `cameraService`, shows LIVE/CONNECTING/error states, capture disabled until `live`
+- Preserved the 7-angle flow (front/left/right/up/down/smile/normal)
+
+### Backend email config (`backend/.env.example`)
+- Added SMTP placeholders (`SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_FROM_EMAIL`, `SMTP_USE_TLS`, `EMAIL_ENABLED`) — no real credentials
+
+## Validation
+- `npx tsc --noEmit` → EXITCODE=0 (no TS errors)
+- `npm run build` → EXIT=0 (production build, 2477 modules)
+- Backend imports OK, all `/api/face/*` routes registered
+- Backend server on :8000 healthy (`face_engine: face_recognition`)
+- Frontend dev server on :5173 (proxy to backend returns real DB data)
+- Admin login + department metadata verified via API

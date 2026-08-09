@@ -26,6 +26,7 @@ export interface CameraHandle {
 export interface CameraCallbacks {
   onStateChange?: (state: CameraState, error?: string) => void
   onStreamReady?: (stream: MediaStream) => void
+  onLive?: (live: boolean) => void
   onFrame?: () => void
 }
 
@@ -44,6 +45,7 @@ class CameraService {
   private callbacks: CameraCallbacks = {}
   private reconnectTimer: number | null = null
   private watchdogTimer: number | null = null
+  private liveMonitorTimer: number | null = null
   private lastFrameTime = 0
   private deviceList: MediaDeviceInfo[] = []
 
@@ -247,6 +249,44 @@ class CameraService {
     this.lastFrameTime = Date.now()
   }
 
+  /** True when a stream is attached AND the video is actually rendering frames. */
+  isLive(): boolean {
+    const v = this.videoRef
+    return (
+      !!this.stream &&
+      this.stream.active === true &&
+      !!v &&
+      v.readyState >= 2 &&
+      v.videoWidth > 0 &&
+      v.videoHeight > 0
+    )
+  }
+
+  /** Get the currently attached video element (for reading resolution). */
+  getVideo(): HTMLVideoElement | null {
+    return this.videoRef
+  }
+
+  /**
+   * Start a lightweight monitor that flags when the attached video element
+   * actually begins rendering (readyState >= 2 && videoWidth > 0). This lets
+   * consumers show an accurate "● CAMERA LIVE" instead of guessing based on
+   * the stream being attached before the <video> mounted.
+   */
+  startLiveMonitor() {
+    if (this.liveMonitorTimer) return
+    this.liveMonitorTimer = window.setInterval(() => {
+      this.callbacks.onLive?.(this.isLive())
+    }, 500)
+  }
+
+  stopLiveMonitor() {
+    if (this.liveMonitorTimer) {
+      window.clearInterval(this.liveMonitorTimer)
+      this.liveMonitorTimer = null
+    }
+  }
+
   private stopAllTracks() {
     if (this.stream) {
       this.stream.getTracks().forEach(t => { t.onended = null; t.stop() })
@@ -255,6 +295,7 @@ class CameraService {
     if (this.videoRef) this.videoRef.srcObject = null
     if (this.watchdogTimer) { window.clearInterval(this.watchdogTimer); this.watchdogTimer = null }
     if (this.reconnectTimer) { window.clearTimeout(this.reconnectTimer); this.reconnectTimer = null }
+    this.stopLiveMonitor()
   }
 
   /** Clean up all resources. */
