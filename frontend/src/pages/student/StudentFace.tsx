@@ -1,11 +1,11 @@
-import React, { useEffect, useRef, useState, useCallback } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import api from '../../lib/api'
 import StudentLayout from '../../components/StudentLayout'
 import { PageHeader, Badge, Card } from '../../components/ui'
 import { useAuth } from '../../store/auth'
 import toast from 'react-hot-toast'
-import { Camera, Loader, RefreshCw, CameraOff, AlertTriangle } from 'lucide-react'
-import { cameraService, CameraState } from '../../lib/camera'
+import { Camera, Loader } from 'lucide-react'
+import { cameraService, attachCameraVideo, CameraState } from '../../lib/camera'
 
 const angles = ['front', 'left', 'right', 'up', 'down', 'smile', 'normal']
 const angleColors: Record<string, string> = {
@@ -35,10 +35,11 @@ export default function StudentFace() {
     return () => {
       cameraService.setCallbacks({})
       cameraService.stopCamera()
+      cameraService.stopLiveMonitor()
     }
   }, [])
 
-  const startCamera = useCallback(async () => {
+  const startCamera = async () => {
     cameraService.setCallbacks({
       onStateChange: (state, err) => {
         setCameraState(state)
@@ -55,9 +56,9 @@ export default function StudentFace() {
       setCameraError(cameraService.getError())
       setCapturing(false)
     }
-  }, [])
+  }
 
-  // Re-attach video once it mounts (black-screen race fix)
+  // Re-attach stream when video mounts (black-screen race fix)
   useEffect(() => {
     if (capturing) {
       cameraService.attachVideo(videoRef.current)
@@ -73,11 +74,16 @@ export default function StudentFace() {
 
   const capture = async () => {
     if (!cameraService.isFrameReady()) {
+      setStatus('No face detected')
       toast.error('Camera frame is not ready. Please wait.')
       return
     }
     const b64 = cameraService.captureFrame()
-    if (!b64) { toast.error('Camera frame is not ready. Please wait.'); return }
+    if (!b64) {
+      setStatus('No face detected')
+      toast.error('Camera frame is not ready. Please wait.')
+      return
+    }
     setSaving(true)
     setStatus('Registering...')
     try {
@@ -88,7 +94,9 @@ export default function StudentFace() {
     } catch (err: any) {
       toast.error(err.response?.data?.detail || 'No face detected')
       setStatus('No face detected')
-    } finally { setSaving(false) }
+    } finally {
+      setSaving(false)
+    }
   }
 
   const camLabel = cameraState === 'on' && live
@@ -97,6 +105,10 @@ export default function StudentFace() {
     ? 'Connecting…'
     : cameraState === 'opening'
     ? 'Opening…'
+    : cameraState === 'denied'
+    ? 'Permission Denied'
+    : cameraState === 'busy'
+    ? 'Busy'
     : cameraState.toUpperCase()
 
   return (
@@ -106,58 +118,42 @@ export default function StudentFace() {
         <Card>
           <div className="flex items-center justify-between mb-4">
             <h3 className="font-semibold">Camera</h3>
-            <div className="flex items-center gap-2">
-              {capturing && (
-                <Badge variant={cameraState === 'on' && live ? 'green' : cameraState === 'opening' ? 'yellow' : 'red'}>
-                  {cameraState === 'on' && live ? '● Camera Live' : camLabel}
-                </Badge>
-              )}
-              {!capturing ? (
-                <button onClick={startCamera} className="btn-primary flex items-center gap-2"><Camera size={16} /> Start Camera</button>
-              ) : (
-                <button onClick={stopCamera} className="btn-secondary">Stop Camera</button>
-              )}
-            </div>
-          </div>
-          <div className="relative rounded-xl overflow-hidden bg-black aspect-video mb-2">
-            <video
-              ref={videoRef}
-              autoPlay
-              playsInline
-              muted
-              className="w-full h-full object-cover"
-            />
-            {!live && capturing && (
-              <div className="absolute inset-0 flex items-center justify-center bg-black/60 text-gray-300 text-sm">
-                <Loader size={20} className="animate-spin mr-2" /> Starting live preview…
-              </div>
+            {!capturing ? (
+              <button onClick={startCamera} className="btn-primary flex items-center gap-2"><Camera size={16} /> Start Camera</button>
+            ) : (
+              <button onClick={stopCamera} className="btn-secondary">Stop Camera</button>
             )}
-            {!capturing && (
-              <div className="absolute inset-0 w-full h-full flex flex-col items-center justify-center text-gray-500">
+          </div>
+          <div className="relative rounded-xl overflow-hidden bg-black aspect-video mb-4">
+            {capturing ? (
+              <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover" />
+            ) : (
+              <div className="w-full h-full flex flex-col items-center justify-center text-gray-500">
                 {cameraState === 'opening' ? (
-                  <><Loader className="animate-spin text-primary-500" size={28} /><p className="text-xs mt-2">Opening camera…</p></>
+                  <><Loader size={28} className="animate-spin mb-2" /><p className="text-xs">Opening camera...</p></>
                 ) : cameraState === 'denied' ? (
-                  <><CameraOff size={32} /><p className="text-xs mt-2">Camera permission denied</p></>
+                  <p className="text-xs text-red-400">Camera permission denied. Allow access and retry.</p>
                 ) : cameraState === 'busy' ? (
-                  <><CameraOff size={32} /><p className="text-xs mt-2">Camera busy</p></>
-                ) : cameraState === 'notfound' || cameraState === 'unsupported' ? (
-                  <><CameraOff size={32} /><p className="text-xs mt-2">No camera found / not supported</p></>
-                ) : cameraState === 'error' && cameraError ? (
-                  <><AlertTriangle size={32} className="text-red-500" /><p className="text-xs mt-2 text-red-500">{cameraError}</p></>
+                  <p className="text-xs text-amber-400">Camera busy — close other apps and retry.</p>
                 ) : (
-                  <><Camera size={32} /><p className="text-xs mt-2">Camera off</p></>
+                  <p className="text-xs">{cameraError || 'Camera off'}</p>
                 )}
               </div>
             )}
+            {/* Camera status badge */}
+            {capturing && (
+              <div className="absolute top-2 left-2">
+                <Badge variant={cameraState === 'on' && live ? 'green' : cameraState === 'on' ? 'yellow' : 'red'}>
+                  {cameraState === 'on' && live ? '● CAMERA LIVE' : camLabel}
+                </Badge>
+              </div>
+            )}
           </div>
-          {cameraError && capturing && (
-            <p className="text-xs text-red-500 mb-1">{cameraError}</p>
+          {cameraState === 'error' && cameraError && (
+            <p className="text-sm text-red-500 mb-3">{cameraError}
+              <button onClick={startCamera} className="ml-2 text-primary-500 underline">Retry</button>
+            </p>
           )}
-          <div className="flex mb-2">
-            <button onClick={startCamera} className="btn-secondary flex items-center gap-2 text-sm">
-              <RefreshCw size={14} /> Refresh Camera
-            </button>
-          </div>
           <div>
             <label className="label">Select Angle</label>
             <div className="flex flex-wrap gap-2 mb-4">
@@ -169,7 +165,7 @@ export default function StudentFace() {
           {status && <p className={`text-sm mb-3 ${status === 'No face detected' ? 'text-red-500' : 'text-emerald-600'}`}>{status}</p>}
           {capturing && (
             <button onClick={capture} disabled={!live || saving} className="btn-primary w-full flex items-center justify-center gap-2">
-              {saving ? <Loader size={16} className="animate-spin" /> : <Camera size={16} />} {saving ? 'Processing...' : `Capture ${angle} face`}
+              <Camera size={16} /> {saving ? 'Capturing...' : `Capture ${angle} face`}
             </button>
           )}
         </Card>
@@ -188,7 +184,7 @@ export default function StudentFace() {
           </div>
           <div className="mt-6 p-4 rounded-xl bg-gray-50 dark:bg-gray-800/50">
             <Badge variant={student?.face_status === 'approved' ? 'green' : 'yellow'}>Status: {student?.face_status || 'pending'}</Badge>
-            <p className="text-xs text-gray-500 mt-2">Capture front, left, right, up, down, smile and normal angles for best recognition accuracy. When the camera shows <b>● Camera Live</b>, you can capture.</p>
+            <p className="text-xs text-gray-500 mt-2">Capture front, left, right, up, down, smile and normal angles for best recognition accuracy.</p>
           </div>
         </Card>
       </div>

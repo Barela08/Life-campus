@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState, useCallback } from 'react'
+ import React, { useEffect, useRef, useState, useCallback } from 'react'
 import api from '../../lib/api'
 import { useAuth } from '../../store/auth'
 import AttendanceLayout from '../../components/AttendanceLayout'
@@ -60,7 +60,7 @@ export default function Attendance() {
   const [cameraError, setCameraError] = useState('')
   const [faceCount, setFaceCount] = useState(0)
   const [cameraFps, setCameraFps] = useState(0)
-  // ---- Debug panel ----
+// ---- Debug panel ----
   const [debugOpen, setDebugOpen] = useState(false)
   const [debugInfo, setDebugInfo] = useState({
     mediaDevices: false,
@@ -76,6 +76,16 @@ export default function Attendance() {
     videoWidth: 0,
     videoHeight: 0,
     streamActive: false,
+    // Full video pipeline diagnostics (proves exactly where it fails)
+    videoElement: false,
+    srcObject: 'NULL',
+    readyState: -1,
+    videoHeightDiag: 0,
+    paused: null,
+    currentTime: 0,
+    trackState: 'none',
+    trackEnabled: false,
+    playing: false,
   })
 
 const videoRef = useRef<HTMLVideoElement>(null)
@@ -216,12 +226,37 @@ const videoRef = useRef<HTMLVideoElement>(null)
     cameraService.refreshCamera().then(setCameraList).catch(() => {})
   }, [])
 
-  // Debug panel: check backend connectivity + mediaDevices support
+// Debug panel: check backend connectivity + mediaDevices support
   useEffect(() => {
     setDebugInfo(d => ({ ...d, mediaDevices: !!navigator.mediaDevices?.getUserMedia }))
     api.get('/attendance/meta/departments')
       .then(() => setDebugInfo(d => ({ ...d, backend: 'online' })))
       .catch(() => setDebugInfo(d => ({ ...d, backend: 'offline' })))
+  }, [])
+
+  // Poll full video pipeline diagnostics into the debug panel (proves exactly
+  // where the camera fails: videoRef null / srcObject null / play() reject /
+  // 0x0 dims / CSS-hidden / overlay-cover / remount / track ended).
+  useEffect(() => {
+    const poll = () => {
+      const diag = cameraService.getDiagnostics()
+      setDebugInfo(d => ({
+        ...d,
+        videoElement: diag.videoElement,
+        srcObject: diag.srcObject,
+        readyState: diag.readyState,
+        videoHeightDiag: diag.videoHeight,
+        paused: diag.paused,
+        currentTime: diag.currentTime,
+        trackState: diag.trackReadyState,
+        trackEnabled: diag.trackEnabled,
+        streamActive: diag.streamActive,
+        playing: diag.playing,
+      }))
+    }
+    poll()
+    const i = setInterval(poll, 500)
+    return () => clearInterval(i)
   }, [])
 
   // Update resolution + low-light + lastFrameRef on each rendered frame
@@ -679,8 +714,15 @@ const videoRef = useRef<HTMLVideoElement>(null)
               the stream was created before this element mounted. This eliminates
               the black-screen race. State/error/overlay UI is layered on top.
             */}
-            <video
-              ref={videoRef}
+<video
+              ref={(el) => {
+                videoRef.current = el
+                // CRITICAL: bind the stream the INSTANT the element mounts.
+                // This fires synchronously on mount (more reliable than a useEffect),
+                // so if a MediaStream already exists it is attached + played immediately —
+                // no waiting for a later render, no timing luck.
+                cameraService.attachVideo(el)
+              }}
               autoPlay
               playsInline
               muted
@@ -926,7 +968,7 @@ const videoRef = useRef<HTMLVideoElement>(null)
               <ChevronDown size={14} className={`transition-transform ${debugOpen ? 'rotate-180' : ''}`} />
             </button>
             {debugOpen && (
-              <div className="px-4 pb-4 pt-1 grid grid-cols-2 gap-x-4 gap-y-2 text-xs font-mono">
+<div className="px-4 pb-4 pt-1 grid grid-cols-2 gap-x-4 gap-y-2 text-xs font-mono">
                 <DebugRow label="Media Devices" value={debugInfo.mediaDevices ? 'Available' : 'N/A'} good={debugInfo.mediaDevices} />
                 <DebugRow label="Permission" value={debugInfo.permission} good={debugInfo.permission === 'granted'} />
                 <DebugRow label="Selected Camera" value={debugInfo.selectedCamera} />
@@ -940,6 +982,15 @@ const videoRef = useRef<HTMLVideoElement>(null)
                 <DebugRow label="Last Recognition" value={debugInfo.lastRecognitionTime} />
                 <DebugRow label="Video Size" value={`${debugInfo.videoWidth}×${debugInfo.videoHeight}`} />
                 <DebugRow label="Last Error" value={debugInfo.lastError} good={debugInfo.lastError === '-' || debugInfo.lastError === ''} />
+                {/* Pipeline diagnostics — proves exactly where a black screen comes from */}
+                <DebugRow label="▶ Video Element" value={debugInfo.videoElement ? 'FOUND' : 'MISSING'} good={debugInfo.videoElement} />
+                <DebugRow label="▶ srcObject" value={debugInfo.srcObject} good={debugInfo.srcObject === 'ATTACHED'} />
+                <DebugRow label="▶ Ready State" value={debugInfo.readyState >= 2 ? `${debugInfo.readyState} (HAVE_DATA)` : `${debugInfo.readyState}`} good={debugInfo.readyState >= 2} />
+                <DebugRow label="▶ Video Height" value={`${debugInfo.videoHeightDiag}px`} good={debugInfo.videoHeightDiag > 0} />
+                <DebugRow label="▶ Playing" value={debugInfo.playing ? 'YES' : 'NO'} good={debugInfo.playing} />
+                <DebugRow label="▶ Paused" value={debugInfo.paused === null ? 'n/a' : String(debugInfo.paused)} good={!debugInfo.paused} />
+                <DebugRow label="▶ Track State" value={debugInfo.trackState} good={debugInfo.trackState === 'live'} />
+                <DebugRow label="▶ Track Enabled" value={String(debugInfo.trackEnabled)} good={debugInfo.trackEnabled} />
               </div>
             )}
           </div>

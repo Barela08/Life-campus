@@ -106,7 +106,7 @@ class CameraService {
     this.callbacks.onStateChange?.(state, error)
   }
 
-  /** Bind a MediaStream to a <video> element, configure it, and start playback. */
+/** Bind a MediaStream to a <video> element, configure it, and start playback. */
   private bindStream(video: HTMLVideoElement, s: MediaStream) {
     video.srcObject = s
     video.muted = true
@@ -116,6 +116,19 @@ class CameraService {
     video.style.display = 'block'
     video.style.visibility = 'visible'
     video.style.opacity = '1'
+    video.style.width = '100%'
+    video.style.height = '100%'
+    video.style.objectFit = 'cover'
+
+    // Wire real playback events so LIVE is only reported once frames render.
+    video.onloadedmetadata = () => {
+      this.callbacks.onLive?.(this.isLive())
+      this.playVideo(video)
+    }
+    video.oncanplay = () => this.callbacks.onLive?.(this.isLive())
+    video.onplaying = () => this.callbacks.onLive?.(this.isLive())
+    video.onerror = () => this.setState('error', 'Video playback error')
+
     this.playVideo(video)
   }
 
@@ -325,9 +338,32 @@ class CameraService {
     )
   }
 
-  /** Get the currently attached video element (for reading resolution). */
+/** Get the currently attached video element (for reading resolution). */
   getVideo(): HTMLVideoElement | null {
     return this.videoRef
+  }
+
+  /** Full runtime diagnostics proving exactly where the pipeline is failing. */
+  getDiagnostics() {
+    const v = this.videoRef
+    const track = this.stream?.getVideoTracks()[0]
+    return {
+      videoElement: !!v,
+      srcObject: v ? (v.srcObject === this.stream ? 'ATTACHED' : 'MISMATCH') : 'NULL',
+      readyState: v ? v.readyState : -1,
+      videoWidth: v ? v.videoWidth : 0,
+      videoHeight: v ? v.videoHeight : 0,
+      paused: v ? v.paused : null,
+      currentTime: v ? v.currentTime : 0,
+      streamActive: this.stream?.active ?? false,
+      trackReadyState: track ? track.readyState : 'none',
+      trackEnabled: track ? track.enabled : false,
+      trackMuted: track ? track.muted : null,
+      settings: track ? (() => {
+        try { return track.getSettings() } catch { return null }
+      })() : null,
+      playing: v ? (v.currentTime > 0 && !v.paused && v.readyState >= 2) : false,
+    }
   }
 
   /** Start a lightweight monitor that reports LIVE/FPS based on real rendering. */
