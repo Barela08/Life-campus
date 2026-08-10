@@ -3,7 +3,8 @@ import api from '../../lib/api'
 import AttendanceLayout from '../../components/AttendanceLayout'
 import { PageHeader, Badge, Modal, Loading } from '../../components/ui'
 import toast from 'react-hot-toast'
-import { Camera, Play, Square, UserCheck, Users, Building2, GraduationCap, Layers } from 'lucide-react'
+import { Camera, Play, Square, UserCheck, Users, RefreshCw, Loader } from 'lucide-react'
+import { cameraService, CameraState } from '../../lib/camera'
 
 export default function TeacherAttendance() {
   const [departments, setDepartments] = useState<any[]>([])
@@ -14,6 +15,9 @@ export default function TeacherAttendance() {
   const [sessionStatus, setSessionStatus] = useState('')
   const [records, setRecords] = useState<any[]>([])
   const [capturing, setCapturing] = useState(false)
+  const [live, setLive] = useState(false)
+  const [cameraState, setCameraState] = useState<CameraState>('off')
+  const [cameraError, setCameraError] = useState('')
   const [scanning, setScanning] = useState(false)
   const [departmentId, setDepartmentId] = useState('')
   const [classId, setClassId] = useState('')
@@ -22,7 +26,6 @@ export default function TeacherAttendance() {
   const [selectorOpen, setSelectorOpen] = useState(!sessionId)
   const [manualOpen, setManualOpen] = useState(false)
   const videoRef = useRef<HTMLVideoElement>(null)
-  const streamRef = useRef<MediaStream | null>(null)
 
   const load = async () => {
     setLoading(true)
@@ -51,20 +54,53 @@ export default function TeacherAttendance() {
   }
 
   const startCamera = async () => {
-    try {
-      const s = await navigator.mediaDevices.getUserMedia({ video: true })
-      streamRef.current = s
-      if (videoRef.current) { videoRef.current.srcObject = s; setCapturing(true) }
-    } catch { toast.error('Camera access denied') }
+    cameraService.setCallbacks({
+      onStateChange: (state, err) => {
+        setCameraState(state)
+        setCameraError(err || '')
+        setCapturing(state === 'on')
+      },
+      onLive: (l) => setLive(l),
+    })
+    cameraService.attachVideo(videoRef.current)
+    cameraService.startLiveMonitor()
+    const ok = await cameraService.startCamera()
+    if (!ok) {
+      setCameraState(cameraService.getState())
+      setCameraError(cameraService.getError())
+      setCapturing(false)
+      setLive(false)
+    }
   }
 
+  const stopCamera = () => {
+    cameraService.stopCamera()
+    setCapturing(false)
+    setLive(false)
+    setCameraState('off')
+  }
+
+  // Re-attach stream when video mounts (black-screen race fix)
+  useEffect(() => {
+    if (capturing) {
+      cameraService.attachVideo(videoRef.current)
+    }
+  }, [capturing, live])
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      cameraService.setCallbacks({})
+      cameraService.stopCamera()
+      cameraService.stopLiveMonitor()
+    }
+  }, [])
+
   const scan = async () => {
-    if (!videoRef.current || !sessionId || scanning) return
-    const canvas = document.createElement('canvas')
-    const video = videoRef.current
-    canvas.width = video.videoWidth; canvas.height = video.videoHeight
-    canvas.getContext('2d')!.drawImage(video, 0, 0)
-    const b64 = canvas.toDataURL('image/jpeg').split(',')[1]
+    if (!sessionId || scanning || !live) return
+    if (!cameraService.isFrameReady()) return
+    const b64 = cameraService.captureFrame()
+    if (!b64) return
     setScanning(true)
     try {
       const res = await api.post('/face/match', { session_id: sessionId, image_b64: b64, camera_id: 'teacher-cam' })
@@ -92,8 +128,7 @@ export default function TeacherAttendance() {
     try {
       await api.post(`/attendance/stop/${sessionId}`, {})
       setSessionStatus('closed')
-      if (streamRef.current) streamRef.current.getTracks().forEach(t => t.stop())
-      setCapturing(false)
+      stopCamera()
       toast.success('Session closed. Absentees marked.')
     } catch (err: any) { toast.error(err.response?.data?.detail || 'Failed to close') }
   }
@@ -130,15 +165,56 @@ export default function TeacherAttendance() {
                 <h3 className="font-semibold flex items-center gap-2"><Camera size={18} className="text-emerald-500" /> Session #{sessionId}</h3>
                 <Badge variant={sessionStatus === 'active' ? 'green' : 'red'}>{sessionStatus}</Badge>
               </div>
+              {/* The <video> is ALWAYS rendered so videoRef.current is always valid
+                  and the MediaStream can be bound at any time — eliminates the
+                  black-screen race. State/error UI is layered on top. */}
               <div className="relative rounded-xl overflow-hidden bg-black aspect-video">
-                {capturing ? <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover" /> : <div className="w-full h-full flex items-center justify-center text-gray-500"><Camera size={32} /></div>}
+                <video
+                  ref={(el) => {
+                    videoRef.current = el
+                    // CRITICAL: bind the stream the INSTANT the element mounts.
+                    cameraService.attachVideo(el)
+                  }}
+                  autoPlay
+                  playsInline
+                  muted
+                  className="absolute inset-0 w-full h-full object-cover"
+                />
+                {!capturing && (
+                  <div className="absolute inset-0 w-full h-full flex flex-col items-center justify-center text-gray-500 bg-black">
+                    {cameraState === 'opening' ? (
+                      <><Loader size={24} className="animate-spin mb-2" /><p className="text-xs">Opening camera...</p></>
+                    ) : cameraState === 'denied' ? (
+                      <p className="text-xs text-red-400">Camera permission denied. Allow access and retry.</p>
+                    ) : cameraState === 'busy' ? (
+                      <p className="text-xs text-amber-400">Camera busy — close other apps and retry.</p>
+                    ) : cameraState === 'error' ? (
+                      <p className="text-xs text-red-400">{cameraError || 'Camera error'}</p>
+                    ) : (
+                      <p className="text-xs">{cameraError || 'Camera off'}</p>
+                    )}
+                  </div>
+                )}
+                {capturing && !live && (
+                  <div className="absolute inset-0 flex items-center justify-center bg-black/50 text-gray-200 text-sm">
+                    <Loader size={20} className="animate-spin mr-2" /> Starting live preview…
+                  </div>
+                )}
+                {capturing && live && (
+                  <div className="absolute top-2 left-2"><Badge variant="green">● LIVE</Badge></div>
+                )}
               </div>
+              {(cameraState === 'error' || cameraState === 'denied' || cameraState === 'busy') && (
+                <button onClick={startCamera} className="btn-secondary w-full flex items-center justify-center gap-2">
+                  <RefreshCw size={16} /> Retry Camera
+                </button>
+              )}
               <div className="flex gap-2">
                 {!capturing ? (
                   <button onClick={startCamera} className="btn-primary flex-1 flex items-center justify-center gap-2"><Camera size={16} /> Enable Camera</button>
                 ) : (
                   <>
-                    <button onClick={scan} disabled={scanning} className="btn-primary flex-1 flex items-center justify-center gap-2">{scanning ? <span className="animate-pulse">Scanning...</span> : <><UserCheck size={16} /> Scan Face</>}</button>
+                    <button onClick={scan} disabled={scanning || !live} className="btn-primary flex-1 flex items-center justify-center gap-2">{scanning ? <span className="animate-pulse">Scanning...</span> : <><UserCheck size={16} /> Scan Face</>}</button>
                     <button onClick={stopSession} className="btn-danger flex items-center justify-center gap-2"><Square size={16} /> Close</button>
                   </>
                 )}

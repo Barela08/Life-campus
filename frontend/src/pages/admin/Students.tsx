@@ -3,11 +3,12 @@ import api from '../../lib/api'
 import AdminLayout from '../../components/AdminLayout'
 import { PageHeader, Modal, SearchInput, Badge, Empty, Loading } from '../../components/ui'
 import toast from 'react-hot-toast'
-import { Plus, Pencil, Trash2, Camera, CheckCircle, RotateCcw, UserPlus } from 'lucide-react'
+import { Plus, Pencil, Trash2, Camera, CheckCircle, RotateCcw, UserPlus, RefreshCw, Loader, CheckCircle2, XCircle, AlertTriangle } from 'lucide-react'
+import { cameraService, CameraState } from '../../lib/camera'
 
 interface Student {
   id: number
-student_id: string
+  student_id: string
   full_name: string
   roll_number: string
   section: string | null
@@ -26,6 +27,8 @@ interface Dept { id: number; name: string }
 interface Course { id: number; name: string }
 interface Semester { id: number; name: string }
 interface Klass { id: number; name: string }
+
+const ANGLES = ['front', 'left', 'right', 'up', 'down', 'smile', 'normal']
 
 export default function Students() {
   const [students, setStudents] = useState<Student[]>([])
@@ -193,78 +196,281 @@ export default function Students() {
   )
 }
 
+// ============ Face Registration Modal ============
 function FaceRegistrationModal({ student, onClose, onDone }: { student: Student | null; onClose: () => void; onDone: () => void }) {
+  // Camera / UI state
   const [capturing, setCapturing] = useState(false)
-  const [angle, setAngle] = useState('front')
-  const [status, setStatus] = useState('')
-  const [stream, setStream] = useState<MediaStream | null>(null)
-  const videoRef = React.useRef<HTMLVideoElement>(null)
-  const canvasRef = React.useRef<HTMLCanvasElement>(null)
+  const [live, setLive] = useState(false)
+  const [cameraState, setCameraState] = useState<CameraState>('off')
+  const [cameraError, setCameraError] = useState('')
+  const [startedAt, setStartedAt] = useState<number | null>(null)
+  const [startTimeout, setStartTimeout] = useState(false)
 
-  const angles = ['front', 'left', 'right', 'up', 'down', 'smile', 'normal']
+  // Registration state
+  const [angle, setAngle] = useState('front')
+  const [registered, setRegistered] = useState<string[]>([])
+  const [processing, setProcessing] = useState(false)
+  const [lastResult, setLastResult] = useState<{ ok: boolean; message: string } | null>(null)
+
+  const videoRef = React.useRef<HTMLVideoElement>(null)
+  const startTimeoutRef = React.useRef<number | null>(null)
+
+  // Load existing registered angles from backend when modal opens
+  useEffect(() => {
+    if (student) {
+      setRegistered([])
+      setAngle('front')
+      setLastResult(null)
+      setCameraError('')
+      setStartTimeout(false)
+      api.get(`/face/status/${student.id}`)
+        .then(res => {
+          const angles: string[] = res.data.registered_angles || []
+          setRegistered(angles)
+          // Auto-select first missing angle
+          const firstMissing = ANGLES.find(a => !angles.includes(a))
+          if (firstMissing) setAngle(firstMissing)
+        })
+        .catch(() => {})
+    }
+  }, [student])
+
+  // Cleanup on unmount / modal close
+  useEffect(() => {
+    return () => {
+      if (startTimeoutRef.current) window.clearTimeout(startTimeoutRef.current)
+      cameraService.setCallbacks({})
+      cameraService.stopCamera()
+      cameraService.stopLiveMonitor()
+    }
+  }, [])
+
+  // Camera timeout: if not live within 10s, show error
+  useEffect(() => {
+    if (capturing && !live && startedAt) {
+      if (startTimeoutRef.current) window.clearTimeout(startTimeoutRef.current)
+      startTimeoutRef.current = window.setTimeout(() => {
+        if (!live) setStartTimeout(true)
+      }, 10000)
+    }
+    return () => { if (startTimeoutRef.current) window.clearTimeout(startTimeoutRef.current) }
+  }, [capturing, live, startedAt])
 
   const startCamera = async () => {
-    try {
-      const s = await navigator.mediaDevices.getUserMedia({ video: true })
-      setStream(s)
-      if (videoRef.current) { videoRef.current.srcObject = s; setCapturing(true) }
-    } catch { toast.error('Camera access denied') }
+    setStartTimeout(false)
+    setCameraError('')
+    setLastResult(null)
+    cameraService.setCallbacks({
+      onStateChange: (state, err) => {
+        setCameraState(state)
+        setCameraError(err || '')
+        setCapturing(state === 'on')
+      },
+      onLive: (l) => {
+        setLive(l)
+        if (l) setStartTimeout(false)
+      },
+    })
+    cameraService.attachVideo(videoRef.current)
+    cameraService.startLiveMonitor()
+    setStartedAt(Date.now())
+    const ok = await cameraService.startCamera()
+    if (!ok) {
+      setCameraState(cameraService.getState())
+      setCameraError(cameraService.getError())
+      setCapturing(false)
+      setLive(false)
+    }
   }
 
+  const stopCamera = () => {
+    cameraService.stopCamera()
+    setCapturing(false)
+    setLive(false)
+    setCameraState('off')
+    if (startTimeoutRef.current) window.clearTimeout(startTimeoutRef.current)
+    setStartTimeout(false)
+  }
+
+  // Re-attach stream when video mounts (black-screen race fix)
   useEffect(() => {
-    return () => { if (stream) stream.getTracks().forEach(t => t.stop()) }
-  }, [stream])
+    if (capturing) {
+      cameraService.attachVideo(videoRef.current)
+    }
+  }, [capturing, live])
 
   const capture = async () => {
-    if (!videoRef.current || !canvasRef.current) return
-    const canvas = canvasRef.current
-    const video = videoRef.current
-    canvas.width = video.videoWidth
-    canvas.height = video.videoHeight
-    canvas.getContext('2d')!.drawImage(video, 0, 0)
-    const b64 = canvas.toDataURL('image/jpeg').split(',')[1]
-    setStatus('Registering...')
+    if (!student || !cameraService.isFrameReady() || !live) {
+      setLastResult({ ok: false, message: 'Camera is not ready. Please wait.' })
+      return
+    }
+    const b64 = cameraService.captureFrame()
+    if (!b64) {
+      setLastResult({ ok: false, message: 'Camera frame is not ready. Please wait.' })
+      return
+    }
+    setProcessing(true)
+    setLastResult(null)
     try {
-      await api.post('/face/register', { student_id: student!.id, angle, image_b64: b64 })
-      setStatus(`Captured: ${angle}`)
-      toast.success(`${angle} face captured`)
+      // Send to existing backend face-registration endpoint.
+      // Backend validates face, generates embedding, saves to DB.
+      // Only mark as captured AFTER backend confirms success.
+      const res = await api.post('/face/register', { student_id: student.id, angle, image_b64: b64 })
+      const updated = [...new Set([...registered, angle])]
+      setRegistered(updated)
+      setLastResult({ ok: true, message: `✓ ${angle} angle registered successfully` })
+      toast.success(`${angle} face registered`)
+      // Move to next missing angle
+      const nextMissing = ANGLES.find(a => !updated.includes(a))
+      if (nextMissing) {
+        setAngle(nextMissing)
+      }
     } catch (err: any) {
-      toast.error(err.response?.data?.detail || 'No face detected')
-      setStatus('No face detected')
+      const detail = err.response?.data?.detail || 'Registration failed. Please try again.'
+      setLastResult({ ok: false, message: detail })
+      toast.error(detail)
+    } finally {
+      setProcessing(false)
     }
   }
 
   if (!student) return null
+
+  const complete = ANGLES.every(a => registered.includes(a))
+  const progress = registered.length
+
+  // Human-readable camera error labels
+  const camErrorMessage =
+    cameraState === 'denied' ? 'Camera permission denied. Allow camera access in browser settings and try again.' :
+    cameraState === 'notfound' ? 'No camera was detected on this device.' :
+    cameraState === 'busy' ? 'Camera is being used by another application. Close other camera apps and try again.' :
+    cameraState === 'unsupported' ? 'Camera not supported in this browser.' :
+    cameraState === 'error' ? (cameraError || 'Unable to start camera. Please try again.') :
+    startTimeout ? 'Camera is taking too long to start.' : ''
+
   return (
     <Modal open={!!student} onClose={onClose} title={`Face Registration - ${student.full_name}`} wide>
       <div className="space-y-4">
+        {/* Student info */}
+        <div className="flex items-center justify-between flex-wrap gap-2">
+          <div>
+            <p className="text-sm text-gray-500">Roll No: {student.roll_number || '-'} • {student.student_id}</p>
+          </div>
+          <Badge variant={complete ? 'green' : registered.length > 0 ? 'yellow' : 'red'}>
+            {complete ? 'Complete' : `${progress}/${ANGLES.length} angles`}
+          </Badge>
+        </div>
+
+        {/* Camera controls */}
         <div className="flex items-center justify-between">
           <p className="text-sm text-gray-500">Capture multiple face angles</p>
           {!capturing ? (
             <button onClick={startCamera} className="btn-primary flex items-center gap-2"><Camera size={16} /> Start Camera</button>
           ) : (
-            <button onClick={() => { stream?.getTracks().forEach(t => t.stop()); setCapturing(false); setStream(null) }} className="btn-secondary">Stop Camera</button>
+            <div className="flex items-center gap-2">
+              <Badge variant={live ? 'green' : 'yellow'}>{live ? '● Camera Live' : 'Starting…'}</Badge>
+              <button onClick={stopCamera} className="btn-secondary">Stop Camera</button>
+            </div>
           )}
         </div>
+
+        {/* Camera view — video ALWAYS rendered so stream can always bind */}
         <div className="relative rounded-xl overflow-hidden bg-black aspect-video">
-          {capturing ? (
-            <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover" />
-          ) : (
-            <div className="w-full h-full flex items-center justify-center text-gray-500">Camera off</div>
+          <video
+            ref={(el) => {
+              videoRef.current = el
+              cameraService.attachVideo(el)
+            }}
+            autoPlay
+            playsInline
+            muted
+            className="absolute inset-0 w-full h-full object-cover"
+          />
+          {!capturing && (
+            <div className="absolute inset-0 w-full h-full flex flex-col items-center justify-center text-gray-500 bg-black">
+              <Camera size={32} className="mb-2 opacity-40" />
+              <p className="text-xs">Camera off — click Start Camera</p>
+            </div>
           )}
-          <canvas ref={canvasRef} className="hidden" />
+          {capturing && !live && (
+            <div className="absolute inset-0 flex items-center justify-center bg-black/50 text-gray-200 text-sm">
+              <Loader size={20} className="animate-spin mr-2" />
+              {startTimeout ? 'Camera is taking too long to start.' : 'Starting live preview…'}
+            </div>
+          )}
+          {capturing && live && (
+            <div className="absolute top-2 left-2"><Badge variant="green">● LIVE</Badge></div>
+          )}
         </div>
+
+        {/* Camera error + retry */}
+        {camErrorMessage && (
+          <div className="p-3 rounded-xl bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/20 text-red-600 dark:text-red-400 text-sm flex items-center gap-2">
+            <AlertTriangle size={16} />
+            <span className="flex-1">{camErrorMessage}</span>
+          </div>
+        )}
+        {(camErrorMessage || !live) && capturing && (
+          <button onClick={startCamera} className="btn-secondary w-full flex items-center justify-center gap-2">
+            <RefreshCw size={16} /> Retry Camera
+          </button>
+        )}
+
+        {/* Angle selector */}
         <div>
           <label className="label">Select Angle</label>
           <div className="flex flex-wrap gap-2">
-            {angles.map(a => (
-              <button key={a} onClick={() => setAngle(a)} className={`px-3 py-1.5 rounded-lg text-sm capitalize transition ${angle === a ? 'bg-primary-600 text-white' : 'bg-gray-100 dark:bg-gray-800 hover:bg-gray-200'}`}>{a}</button>
+            {ANGLES.map(a => (
+              <button
+                key={a}
+                onClick={() => setAngle(a)}
+                disabled={processing}
+                className={`px-3 py-1.5 rounded-lg text-sm capitalize transition flex items-center gap-1.5 ${
+                  angle === a ? 'bg-primary-600 text-white' :
+                  registered.includes(a) ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-400' :
+                  'bg-gray-100 dark:bg-gray-800 hover:bg-gray-200'
+                }`}
+              >
+                {registered.includes(a) ? <CheckCircle2 size={14} /> : <span className="w-3.5 h-3.5 rounded-full border-2 border-current opacity-50" />}
+                {a}
+              </button>
             ))}
           </div>
         </div>
-        {status && <p className="text-sm text-emerald-600">{status}</p>}
-        {capturing && <button onClick={capture} className="btn-primary w-full flex items-center justify-center gap-2"><Camera size={16} /> Capture {angle} face</button>}
-        <button onClick={onDone} className="btn-secondary w-full">Done</button>
+
+        {/* Result message */}
+        {lastResult && (
+          <p className={`text-sm flex items-center gap-2 ${lastResult.ok ? 'text-emerald-600' : 'text-red-500'}`}>
+            {lastResult.ok ? <CheckCircle2 size={16} /> : <XCircle size={16} />}
+            {lastResult.message}
+          </p>
+        )}
+
+        {/* Capture button */}
+        {capturing && live && !complete && (
+          <button
+            onClick={capture}
+            disabled={processing}
+            className="btn-primary w-full flex items-center justify-center gap-2"
+          >
+            {processing ? <Loader size={16} className="animate-spin" /> : <Camera size={16} />}
+            {processing ? 'Processing face...' : `Capture ${angle} face`}
+          </button>
+        )}
+
+        {/* Complete UI */}
+        {complete && (
+          <div className="p-4 rounded-xl bg-emerald-50 dark:bg-emerald-500/10 border border-emerald-200 dark:border-emerald-500/20 text-center">
+            <CheckCircle2 size={32} className="mx-auto mb-2 text-emerald-500" />
+            <p className="font-semibold text-emerald-700 dark:text-emerald-400">✓ Face Registration Complete</p>
+            <p className="text-xs text-emerald-600 dark:text-emerald-500 mt-1">{progress}/{ANGLES.length} angles registered</p>
+          </div>
+        )}
+
+        <div className="flex gap-2">
+          <button onClick={onDone} className="btn-primary flex-1">Done</button>
+          {capturing && <button onClick={stopCamera} className="btn-secondary">Stop Camera</button>}
+        </div>
       </div>
     </Modal>
   )

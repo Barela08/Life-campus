@@ -3,8 +3,8 @@ import api from '../../lib/api'
 import AdminLayout from '../../components/AdminLayout'
 import { PageHeader, Badge, Loading, Modal } from '../../components/ui'
 import toast from 'react-hot-toast'
-import { Camera, CheckCircle2, RotateCcw, RefreshCw, Search, ChevronRight, XCircle, Trash2, UserCheck } from 'lucide-react'
-import { cameraService, attachCameraVideo, CameraState } from '../../lib/camera'
+import { Camera, CheckCircle2, RotateCcw, RefreshCw, Search, Trash2, UserCheck, Loader } from 'lucide-react'
+import { cameraService, CameraState } from '../../lib/camera'
 
 const ANGLES = ['front', 'left', 'right', 'up', 'down', 'smile', 'normal']
 
@@ -17,6 +17,7 @@ export default function AdminFace() {
   const [captureOpen, setCaptureOpen] = useState(false)
   const [angleIdx, setAngleIdx] = useState(0)
   const [capturing, setCapturing] = useState(false)
+  const [live, setLive] = useState(false)
   const [cameraState, setCameraState] = useState<CameraState>('off')
   const [cameraError, setCameraError] = useState('')
   const [capturedAngles, setCapturedAngles] = useState<string[]>([])
@@ -54,12 +55,13 @@ export default function AdminFace() {
       setCapturedAngles(res.data.registered_angles || [])
       if (res.data.complete) setRegistrationComplete(true)
     } catch {}
-    setTimeout(() => startCaptureCam(), 100)
+    // Start camera immediately (no setTimeout race)
+    startCaptureCam()
   }
 
   const closeCapture = () => {
     cameraService.stopCamera()
-    setCaptureOpen(false); setCameraState('off'); setCaptureStudent(null)
+    setCaptureOpen(false); setCameraState('off'); setCapturing(false); setLive(false); setCaptureStudent(null)
   }
 
   const startCaptureCam = async () => {
@@ -69,12 +71,16 @@ export default function AdminFace() {
         setCameraError(err || '')
         setCapturing(state === 'on')
       },
+      onLive: (l) => setLive(l),
     })
     cameraService.attachVideo(videoRef.current)
+    cameraService.startLiveMonitor()
     const ok = await cameraService.startCamera()
     if (!ok) {
       setCameraState(cameraService.getState())
       setCameraError(cameraService.getError())
+      setCapturing(false)
+      setLive(false)
     }
   }
 
@@ -83,11 +89,20 @@ export default function AdminFace() {
     if (captureOpen) {
       cameraService.attachVideo(videoRef.current)
     }
-  }, [captureOpen, capturing])
+  }, [captureOpen, capturing, live])
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      cameraService.setCallbacks({})
+      cameraService.stopCamera()
+      cameraService.stopLiveMonitor()
+    }
+  }, [])
 
   const captureAngle = async () => {
     if (!captureId) return
-    if (!cameraService.isFrameReady()) {
+    if (!cameraService.isFrameReady() || !live) {
       setCaptureError('Camera frame is not ready. Please wait.')
       return
     }
@@ -105,8 +120,10 @@ export default function AdminFace() {
       setCapturedAngles(a => [...new Set([...a, angle])])
       setCaptureStatus(`✓ ${angle} angle captured`)
       toast.success(`${angle} angle captured`)
-      if (angleIdx < ANGLES.length - 1) {
-        setAngleIdx(angleIdx + 1)
+      // Advance to the next angle that hasn't been captured yet
+      const nextIdx = ANGLES.findIndex((a, i) => i > angleIdx && !capturedAngles.includes(a))
+      if (nextIdx >= 0) {
+        setAngleIdx(nextIdx)
       } else {
         setRegistrationComplete(true)
         setCaptureStatus('Face Registration Complete')
@@ -220,25 +237,60 @@ export default function AdminFace() {
             ))}
           </div>
 
-          {/* Camera view */}
+          {/* Camera view — the <video> is ALWAYS rendered so videoRef.current is
+              always valid and the MediaStream can be bound at any time. This
+              eliminates the black-screen race. State/error UI is layered on top. */}
           <div className="rounded-xl overflow-hidden bg-black aspect-video relative">
-            {capturing && cameraState === 'on' ? (
-              <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover" />
-            ) : (
-              <div className="w-full h-full flex items-center justify-center text-gray-500 flex-col">
-                <Camera size={40} />
-                <p className="text-xs mt-2">
-                  {cameraState === 'error' ? cameraError || 'Camera error' :
-                   cameraState === 'denied' ? 'Camera permission denied' :
-                   cameraState === 'busy' ? 'Camera busy' :
-                   cameraState === 'notfound' ? 'No camera found' :
-                   cameraState === 'unsupported' ? 'Camera not supported' :
-                   'Starting camera…'}
-                </p>
+            <video
+              ref={(el) => {
+                videoRef.current = el
+                // CRITICAL: bind the stream the INSTANT the element mounts.
+                // This fires synchronously on mount (more reliable than a useEffect),
+                // so if a MediaStream already exists it is attached + played immediately —
+                // no waiting for a later render, no timing luck.
+                cameraService.attachVideo(el)
+              }}
+              autoPlay
+              playsInline
+              muted
+              className="absolute inset-0 w-full h-full object-cover"
+            />
+            {!(capturing && cameraState === 'on') && (
+              <div className="absolute inset-0 w-full h-full flex items-center justify-center text-gray-500 flex-col bg-black">
+                {cameraState === 'opening' ? (
+                  <><Loader size={28} className="animate-spin mb-2" /><p className="text-xs">Opening camera...</p></>
+                ) : cameraState === 'denied' ? (
+                  <p className="text-xs text-red-400">Camera permission denied. Allow access and retry.</p>
+                ) : cameraState === 'busy' ? (
+                  <p className="text-xs text-amber-400">Camera busy — close other apps and retry.</p>
+                ) : cameraState === 'notfound' ? (
+                  <p className="text-xs">No camera found. Connect a camera and retry.</p>
+                ) : cameraState === 'unsupported' ? (
+                  <p className="text-xs">Camera not supported in this browser.</p>
+                ) : cameraState === 'error' ? (
+                  <p className="text-xs text-red-400">{cameraError || 'Camera error'}</p>
+                ) : (
+                  <p className="text-xs">{cameraError || 'Starting camera…'}</p>
+                )}
+              </div>
+            )}
+            {capturing && cameraState === 'on' && !live && (
+              <div className="absolute inset-0 flex items-center justify-center bg-black/50 text-gray-200 text-sm">
+                <Loader size={20} className="animate-spin mr-2" /> Starting live preview…
               </div>
             )}
             <div className="absolute top-2 left-2"><Badge variant="blue">Current: {ANGLES[angleIdx]}</Badge></div>
+            {capturing && cameraState === 'on' && live && (
+              <div className="absolute top-2 right-2"><Badge variant="green">● LIVE</Badge></div>
+            )}
           </div>
+
+          {/* Camera error retry */}
+          {(cameraState === 'error' || cameraState === 'denied' || cameraState === 'busy' || cameraState === 'notfound') && (
+            <button onClick={startCaptureCam} className="btn-secondary w-full flex items-center justify-center gap-2">
+              <RefreshCw size={16} /> Retry Camera
+            </button>
+          )}
 
           {/* Status / Error messages */}
           {captureStatus && <p className="text-sm text-emerald-600 text-center">{captureStatus}</p>}
@@ -248,7 +300,7 @@ export default function AdminFace() {
             <>
               <p className="text-xs text-gray-400 text-center">Position the student's face for the <b className="text-primary-400">{ANGLES[angleIdx]}</b> angle, then capture.</p>
               <div className="flex gap-2">
-                <button onClick={captureAngle} disabled={cameraState !== 'on' || saving} className="btn-primary flex-1 flex items-center justify-center gap-2">
+                <button onClick={captureAngle} disabled={cameraState !== 'on' || !live || saving} className="btn-primary flex-1 flex items-center justify-center gap-2">
                   <Camera size={16} /> {saving ? 'Processing...' : `Capture ${ANGLES[angleIdx]}`}
                 </button>
                 <button onClick={closeCapture} className="btn-secondary">Close</button>

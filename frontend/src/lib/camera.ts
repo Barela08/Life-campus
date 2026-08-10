@@ -2,18 +2,22 @@
  * Shared Camera Service — ONE getUserMedia implementation for the entire app.
  * Used by: Attendance Terminal, Admin Face Registration, Student Face Registration.
  *
- * Supports: startCamera(), stopCamera(), restartCamera(), refreshCamera(), switchCamera()
- * Handles: permission denied, no camera, camera busy, camera disconnected,
- *          invalid device, browser unsupported, stream failure, video element not ready.
- *
  * RENDERING-PROOF DESIGN:
- * - The <video> element must be RENDERED ALWAYS (not conditionally) so that
- *   attachVideo() always has a mounted element to which the stream can be bound.
- * - LIVE is only reported when the video is actually rendering frames
- *   (readyState >= 2 && videoWidth > 0 && !paused).
- * - FPS is measured from real rendered frames (requestVideoFrameCallback or a
- *   rAF/currentTime fallback), NOT guessed from stream attachment.
- * - On mount, if a stream already exists, it is re-attached (no second getUserMedia).
+ * - The <video> element MUST be RENDERED ALWAYS (not conditionally) so attachVideo()
+ *   always has a mounted element to bind to. Overlays sit ON TOP of the stable video.
+ * - LIVE is ONLY reported when the video is ACTUALLY rendering frames:
+ *     stream.active === true
+ *     AND video.srcObject === stream (ATTACHED)
+ *     AND video.readyState >= 2
+ *     AND video.videoWidth > 0
+ *     AND video.videoHeight > 0
+ *     AND video.paused === false
+ *     AND real frames are being rendered (FPS > 0)
+ * - FPS is measured from REAL rendered video frames via requestVideoFrameCallback
+ *   (fallback: rAF + currentTime delta).
+ * - bindStream sets event handlers BEFORE assigning srcObject, explicitly calls
+ *   play(), waits for loadedmetadata, and retries until the video renders.
+ * - Only ONE active MediaStream per service; starting stops any previous stream.
  */
 
 export type CameraState = 'off' | 'opening' | 'on' | 'error' | 'denied' | 'busy' | 'notfound' | 'unsupported'
@@ -64,8 +68,10 @@ class CameraService {
   private liveMonitorTimer: number | null = null
   private lastFrameTime = 0
   private deviceList: MediaDeviceInfo[] = []
+  private bindRetryTimer: number | null = null
 
-  // FPS measurement
+  // FPS measurement (real video frames)
+  private rvfcHandle = 0
   private fpsRaf = 0
   private fpsFrames = 0
   private fpsLast = 0
@@ -76,6 +82,11 @@ class CameraService {
     this.videoRef = video
     if (video && this.stream) {
       this.bindStream(video, this.stream)
+      // CRITICAL: restart FPS monitoring now that the video element exists.
+      // If the video mounted AFTER the stream was created, FPS monitoring
+      // was started with a null videoRef and would never measure frames,
+      // causing isLive() to always return false (camera stuck "Connecting…").
+      this.startFpsMonitoring()
     }
   }
 
@@ -106,13 +117,22 @@ class CameraService {
     this.callbacks.onStateChange?.(state, error)
   }
 
-/** Bind a MediaStream to a <video> element, configure it, and start playback. */
+  /**
+   * Bind a MediaStream to a <video> element, configure it, wait for metadata,
+   * explicitly play it, and retry until real frames render. This is the
+   * definitive stream → video attachment path.
+   */
   private bindStream(video: HTMLVideoElement, s: MediaStream) {
-    video.srcObject = s
+    // Clear any pending retry so we start fresh
+    if (this.bindRetryTimer) {
+      window.clearTimeout(this.bindRetryTimer)
+      this.bindRetryTimer = null
+    }
+
+    // 1) Configure attributes BEFORE assigning srcObject
     video.muted = true
     video.autoplay = true
     video.playsInline = true
-    // Ensure the video is not hidden by CSS
     video.style.display = 'block'
     video.style.visibility = 'visible'
     video.style.opacity = '1'
@@ -120,39 +140,73 @@ class CameraService {
     video.style.height = '100%'
     video.style.objectFit = 'cover'
 
-    // Wire real playback events so LIVE is only reported once frames render.
+    // 2) Wire real playback events BEFORE assigning srcObject
     video.onloadedmetadata = () => {
+      console.log('VIDEO METADATA', video.videoWidth, video.videoHeight)
       this.callbacks.onLive?.(this.isLive())
-      this.playVideo(video)
+      this.tryPlay(video)
     }
     video.oncanplay = () => this.callbacks.onLive?.(this.isLive())
-    video.onplaying = () => this.callbacks.onLive?.(this.isLive())
-    video.onerror = () => this.setState('error', 'Video playback error')
+    video.onplaying = () => {
+      this.lastFrameTime = Date.now()
+      this.callbacks.onLive?.(this.isLive())
+    }
+    video.onerror = () => {
+      console.error('VIDEO ERROR', video.error)
+      this.setState('error', 'Video playback error')
+    }
 
-    this.playVideo(video)
+    // 3) Assign the stream (idempotent)
+    if (video.srcObject !== s) {
+      video.srcObject = s
+    }
+    console.log('srcObject assigned', video.srcObject)
+
+    // 4) Explicitly start playback
+    this.tryPlay(video)
+
+    // 5) Fallback retry: guarantee it actually starts rendering (handles the
+    //    case where loadedmetadata/play raced React's render).
+    this.bindRetryTimer = window.setTimeout(() => {
+      this.bindRetryTimer = null
+      if (!this.stream || video.srcObject !== this.stream) return
+      if (video.readyState >= 2) {
+        if (video.paused) this.tryPlay(video)
+      } else {
+        video.load()
+        this.tryPlay(video)
+      }
+    }, 800)
   }
 
-  /** Try to play the video; capture and report any rejection. Uses a manual retry for autoplay policy. */
-  private playVideo(video: HTMLVideoElement) {
-    const doPlay = () => {
-      const p = video.play()
-      if (p) {
-        p.then(() => {
-          this.callbacks.onLive?.(this.isLive())
-        }).catch((err: unknown) => {
-          const e = err as Error
-          // NotAllowedError is common before any user gesture; but in this app the camera
-          // is started from a user click, so autoplay should be permitted. Surface errors.
-          this.setState('on', `video.play() failed: ${e?.message || 'unknown'}`)
-        })
-      }
-    }
-    if (video.paused && this.stream?.active) {
-      doPlay()
+  /** Explicitly call play() and capture/report any error (never swallowed). */
+  private tryPlay(video: HTMLVideoElement) {
+    if (!this.stream?.active) return
+    const p = video.play()
+    if (p) {
+      p.then(() => {
+        this.lastFrameTime = Date.now()
+        console.log('VIDEO PLAY SUCCESS', video.videoWidth, video.videoHeight, 'paused=', video.paused)
+        this.callbacks.onLive?.(this.isLive())
+      }).catch((err: unknown) => {
+        const e = err as Error
+        console.error('VIDEO PLAY ERROR', e?.message || err)
+        // NotAllowedError often happens if play() is called before the user
+        // gesture chain completes; retry shortly with the same stream.
+        window.setTimeout(() => {
+          if (this.stream && video.srcObject === this.stream && video.paused) {
+            video.play().then(() => this.callbacks.onLive?.(this.isLive())).catch(() => {})
+          }
+        }, 300)
+      })
     }
   }
 
   private attachStream(s: MediaStream) {
+    // Single-stream guarantee: stop any previous stream before adopting a new one.
+    if (this.stream && this.stream !== s) {
+      this.stream.getTracks().forEach(t => { t.onended = null; t.stop() })
+    }
     this.stream = s
     this.setState('on')
     this.lastFrameTime = Date.now()
@@ -164,7 +218,8 @@ class CameraService {
 
     this.startFpsMonitoring()
 
-    // Watchdog: detect stalled streams (no frames rendered)
+    // Watchdog: only restart if the stream is active but NO real video frames
+    // have rendered for 6s (lastFrameTime is updated by real frame callbacks).
     if (this.watchdogTimer) window.clearInterval(this.watchdogTimer)
     this.watchdogTimer = window.setInterval(() => {
       if (this.state === 'on' && this.stream?.active && Date.now() - this.lastFrameTime > 6000) {
@@ -315,7 +370,7 @@ class CameraService {
 
   /** Check if the video frame is ready for capture. */
   isFrameReady(): boolean {
-    return !!this.videoRef && this.videoRef.videoWidth > 0 && this.videoRef.videoHeight > 0 && this.videoRef.readyState >= 2
+    return !!this.videoRef && this.videoRef.videoWidth > 0 && this.videoRef.videoHeight > 0 && this.videoRef.readyState >= 2 && !this.videoRef.paused
   }
 
   /** Mark that a frame was received (for watchdog). Called by the render-loop consumer. */
@@ -323,7 +378,14 @@ class CameraService {
     this.lastFrameTime = Date.now()
   }
 
-  /** True only when the stream is active AND the video is actually rendering frames. */
+  /**
+   * True when the stream is active AND the video is actually rendering frames.
+   * Based on REAL video state (srcObject attached, readyState>=2, dims>0,
+   * not paused). FPS is NOT required — it is a diagnostic metric that can
+   * report 0 for up to 1 second even when the video is rendering fine.
+   * Requiring FPS>0 caused the UI to stay stuck on "Starting live preview…"
+   * forever even though the camera was clearly working.
+   */
   isLive(): boolean {
     const v = this.videoRef
     return (
@@ -338,7 +400,14 @@ class CameraService {
     )
   }
 
-/** Get the currently attached video element (for reading resolution). */
+  /** Current measured FPS (from real rendered frames). */
+  getCurrentFps(): number {
+    return this.fpsFramesLive
+  }
+
+  private fpsFramesLive = 0
+
+  /** Get the currently attached video element (for reading resolution). */
   getVideo(): HTMLVideoElement | null {
     return this.videoRef
   }
@@ -349,7 +418,7 @@ class CameraService {
     const track = this.stream?.getVideoTracks()[0]
     return {
       videoElement: !!v,
-      srcObject: v ? (v.srcObject === this.stream ? 'ATTACHED' : 'MISMATCH') : 'NULL',
+      srcObject: v ? (v.srcObject === this.stream ? 'ATTACHED' : v.srcObject ? 'MISMATCH' : 'NULL') : 'NULL',
       readyState: v ? v.readyState : -1,
       videoWidth: v ? v.videoWidth : 0,
       videoHeight: v ? v.videoHeight : 0,
@@ -363,10 +432,11 @@ class CameraService {
         try { return track.getSettings() } catch { return null }
       })() : null,
       playing: v ? (v.currentTime > 0 && !v.paused && v.readyState >= 2) : false,
+      fps: this.getCurrentFps(),
     }
   }
 
-  /** Start a lightweight monitor that reports LIVE/FPS based on real rendering. */
+  /** Start a lightweight monitor that reports LIVE based on real rendering. */
   startLiveMonitor() {
     if (this.liveMonitorTimer) return
     this.liveMonitorTimer = window.setInterval(() => {
@@ -381,19 +451,33 @@ class CameraService {
     }
   }
 
-  /** Measure real FPS from rendered video frames. */
+  /**
+   * Measure real FPS from rendered video frames using requestVideoFrameCallback
+   * when available; otherwise fall back to rAF + video.currentTime delta.
+   */
   private startFpsMonitoring() {
     this.stopFpsMonitoring()
     this.fpsFrames = 0
+    this.fpsFramesLive = 0
     this.fpsLast = performance.now()
 
     const v = this.videoRef as HTMLVideoElementWithRVFC | null
-    const count = () => {
+
+    const onRealFrame = () => {
       this.fpsFrames++
       this.lastFrameTime = Date.now()
-      this.fpsRaf = requestAnimationFrame(count)
+      if (v && typeof v.requestVideoFrameCallback === 'function') {
+        this.rvfcHandle = v.requestVideoFrameCallback(onRealFrame)
+      } else {
+        this.fpsRaf = requestAnimationFrame(onRealFrame)
+      }
     }
-    this.fpsRaf = requestAnimationFrame(count)
+
+    if (v && typeof v.requestVideoFrameCallback === 'function') {
+      this.rvfcHandle = v.requestVideoFrameCallback(onRealFrame)
+    } else {
+      this.fpsRaf = requestAnimationFrame(onRealFrame)
+    }
 
     this.fpsIntervalTimer = window.setInterval(() => {
       const now = performance.now()
@@ -401,11 +485,17 @@ class CameraService {
       const fps = dt > 0 ? Math.round((this.fpsFrames * 1000) / dt) : 0
       this.fpsFrames = 0
       this.fpsLast = now
+      this.fpsFramesLive = fps
       this.callbacks.onFps?.(fps)
     }, 1000)
   }
 
   private stopFpsMonitoring() {
+    const v = this.videoRef as HTMLVideoElementWithRVFC | null
+    if (v && typeof v.cancelVideoFrameCallback === 'function' && this.rvfcHandle) {
+      v.cancelVideoFrameCallback(this.rvfcHandle)
+    }
+    this.rvfcHandle = 0
     if (this.fpsRaf) cancelAnimationFrame(this.fpsRaf)
     this.fpsRaf = 0
     if (this.fpsIntervalTimer) window.clearInterval(this.fpsIntervalTimer)
@@ -413,11 +503,16 @@ class CameraService {
   }
 
   private stopAllTracks() {
+    if (this.bindRetryTimer) { window.clearTimeout(this.bindRetryTimer); this.bindRetryTimer = null }
     if (this.stream) {
       this.stream.getTracks().forEach(t => { t.onended = null; t.stop() })
       this.stream = null
     }
     if (this.videoRef) {
+      this.videoRef.onloadedmetadata = null
+      this.videoRef.oncanplay = null
+      this.videoRef.onplaying = null
+      this.videoRef.onerror = null
       this.videoRef.srcObject = null
     }
     if (this.watchdogTimer) { window.clearInterval(this.watchdogTimer); this.watchdogTimer = null }

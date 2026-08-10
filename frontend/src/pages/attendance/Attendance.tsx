@@ -11,7 +11,7 @@ import {
   Fingerprint, Calendar, Clock, Ban, Shield, AlertCircle, CheckCircle,
   Activity, Layers, ArrowLeft, RotateCcw, Eye, EyeOff
 } from 'lucide-react'
-import { cameraService, attachCameraVideo, CameraState } from '../../lib/camera'
+import { cameraService, CameraState } from '../../lib/camera'
 
 const OVERLAY_DURATION = 4500 // ms — 4–5 second show rule
 const SCAN_INTERVAL = 1200 // ms between recognition requests
@@ -187,6 +187,10 @@ const videoRef = useRef<HTMLVideoElement>(null)
           lastError: '-',
         }))
       },
+      onFps: (fps) => {
+        setCameraFps(fps)
+        setDebugInfo(d => ({ ...d, fps }))
+      },
     })
     cameraService.attachVideo(videoRef.current)
     cameraService.startLiveMonitor()
@@ -252,6 +256,7 @@ const videoRef = useRef<HTMLVideoElement>(null)
         trackEnabled: diag.trackEnabled,
         streamActive: diag.streamActive,
         playing: diag.playing,
+        fps: diag.fps,
       }))
     }
     poll()
@@ -991,6 +996,8 @@ const videoRef = useRef<HTMLVideoElement>(null)
                 <DebugRow label="▶ Paused" value={debugInfo.paused === null ? 'n/a' : String(debugInfo.paused)} good={!debugInfo.paused} />
                 <DebugRow label="▶ Track State" value={debugInfo.trackState} good={debugInfo.trackState === 'live'} />
                 <DebugRow label="▶ Track Enabled" value={String(debugInfo.trackEnabled)} good={debugInfo.trackEnabled} />
+                <DebugRow label="▶ Current Time" value={debugInfo.currentTime.toFixed(2)} good={debugInfo.currentTime > 0} />
+                <DebugRow label="▶ Render FPS" value={`${debugInfo.fps}`} good={debugInfo.fps > 0} />
               </div>
             )}
           </div>

@@ -5,7 +5,7 @@ import { PageHeader, Badge, Card } from '../../components/ui'
 import { useAuth } from '../../store/auth'
 import toast from 'react-hot-toast'
 import { Camera, Loader } from 'lucide-react'
-import { cameraService, attachCameraVideo, CameraState } from '../../lib/camera'
+import { cameraService, CameraState } from '../../lib/camera'
 
 const angles = ['front', 'left', 'right', 'up', 'down', 'smile', 'normal']
 const angleColors: Record<string, string> = {
@@ -87,7 +87,10 @@ export default function StudentFace() {
     setSaving(true)
     setStatus('Registering...')
     try {
-      await api.post('/face/register', { student_id: student.student_id, angle, image_b64: b64 })
+      // CRITICAL: /face/register expects the DB integer id (student.id),
+      // NOT the string student_id (e.g. "STU001"). Using the wrong field
+      // caused a 422 validation error and face registration always failed.
+      await api.post('/face/register', { student_id: student.id, angle, image_b64: b64 })
       setRegistered([...new Set([...registered, angle])])
       setStatus(`Captured: ${angle}`)
       toast.success(`${angle} face captured`)
@@ -124,11 +127,29 @@ export default function StudentFace() {
               <button onClick={stopCamera} className="btn-secondary">Stop Camera</button>
             )}
           </div>
+          {/*
+            The <video> element is ALWAYS rendered so videoRef.current is always
+            valid and the MediaStream can be bound at any time — including when
+            the stream was created before this element mounted. This eliminates
+            the black-screen race. State/error/overlay UI is layered on top.
+          */}
           <div className="relative rounded-xl overflow-hidden bg-black aspect-video mb-4">
-            {capturing ? (
-              <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover" />
-            ) : (
-              <div className="w-full h-full flex flex-col items-center justify-center text-gray-500">
+            <video
+              ref={(el) => {
+                videoRef.current = el
+                // CRITICAL: bind the stream the INSTANT the element mounts.
+                // This fires synchronously on mount (more reliable than a useEffect),
+                // so if a MediaStream already exists it is attached + played immediately —
+                // no waiting for a later render, no timing luck.
+                cameraService.attachVideo(el)
+              }}
+              autoPlay
+              playsInline
+              muted
+              className="absolute inset-0 w-full h-full object-cover"
+            />
+            {!capturing && (
+              <div className="absolute inset-0 w-full h-full flex flex-col items-center justify-center text-gray-500 bg-black">
                 {cameraState === 'opening' ? (
                   <><Loader size={28} className="animate-spin mb-2" /><p className="text-xs">Opening camera...</p></>
                 ) : cameraState === 'denied' ? (
@@ -138,6 +159,11 @@ export default function StudentFace() {
                 ) : (
                   <p className="text-xs">{cameraError || 'Camera off'}</p>
                 )}
+              </div>
+            )}
+            {capturing && !live && (
+              <div className="absolute inset-0 flex items-center justify-center bg-black/50 text-gray-200 text-sm">
+                <Loader size={20} className="animate-spin mr-2" /> Starting live preview…
               </div>
             )}
             {/* Camera status badge */}
