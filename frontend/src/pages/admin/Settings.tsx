@@ -3,13 +3,15 @@ import AdminLayout from '../../components/AdminLayout'
 import { PageHeader, Card } from '../../components/ui'
 import { useAuth } from '../../store/auth'
 import { useTheme } from '../../store/theme'
+import { useBranding } from '../../store/branding'
 import api from '../../lib/api'
 import toast from 'react-hot-toast'
-import { ShieldCheck, Sun, Moon, Database, Mail, Lock, User, Save, Loader } from 'lucide-react'
+import { ShieldCheck, Sun, Moon, Database, Mail, Lock, User, Save, Loader, Building2, ShieldAlert, Upload } from 'lucide-react'
 
 export default function Settings() {
   const { user, changePassword, updateProfile, refreshUser } = useAuth()
   const { dark, toggle } = useTheme()
+  const { systemName, systemLogo, maintenanceMode, refreshBranding } = useBranding()
 
   // Profile form
   const [fullName, setFullName] = useState('')
@@ -24,7 +26,14 @@ export default function Settings() {
   const [confirm, setConfirm] = useState('')
   const [saving, setSaving] = useState(false)
 
-  // Load current profile on mount
+  // Branding & System Config form
+  const [systemNameInput, setSystemNameInput] = useState('')
+  const [logoPreview, setLogoPreview] = useState('')
+  const [maintMode, setMaintMode] = useState(false)
+  const [thresholdInput, setThresholdInput] = useState('0.6')
+  const [savingBranding, setSavingBranding] = useState(false)
+
+  // Load current profile & branding settings on mount
   useEffect(() => {
     setFullName(user?.full_name || '')
     setEmail(user?.email || '')
@@ -37,7 +46,55 @@ export default function Settings() {
       })
       .catch(() => {})
       .finally(() => setLoadingProfile(false))
+
+    // Load admin settings
+    api.get('/admin/settings')
+      .then(res => {
+        if (res.data.system_name) setSystemNameInput(res.data.system_name)
+        if (res.data.system_logo) setLogoPreview(res.data.system_logo)
+        if (res.data.maintenance_mode !== undefined) {
+          setMaintMode(String(res.data.maintenance_mode).toLowerCase() === 'true' || String(res.data.maintenance_mode) === '1')
+        }
+        if (res.data.face_match_threshold) setThresholdInput(String(res.data.face_match_threshold))
+      })
+      .catch(() => {})
   }, [user?.id])
+
+  const handleLogoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    const formData = new FormData()
+    formData.append('file', file)
+    try {
+      const res = await api.post('/admin/settings/logo', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' }
+      })
+      setLogoPreview(res.data.logo_url)
+      toast.success('✓ Logo uploaded successfully')
+      await refreshBranding()
+    } catch (err: any) {
+      toast.error(err.response?.data?.detail || 'Logo upload failed')
+    }
+  }
+
+  const saveBrandingSettings = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setSavingBranding(true)
+    try {
+      await api.post('/admin/settings', {
+        system_name: systemNameInput,
+        maintenance_mode: maintMode ? 'true' : 'false',
+        face_match_threshold: thresholdInput,
+      })
+      toast.success('✓ Settings updated successfully')
+      await refreshBranding()
+    } catch (err: any) {
+      toast.error(err.response?.data?.detail || 'Failed to update settings')
+    } finally {
+      setSavingBranding(false)
+    }
+  }
+
 
   const submitProfile = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -131,10 +188,90 @@ export default function Settings() {
         </div>
 
         <div className="space-y-6">
+          {/* System Branding & Maintenance Mode Settings */}
+          <Card>
+
+            <h3 className="font-semibold mb-4 flex items-center gap-2">
+              <Building2 size={18} className="text-purple-500" /> System Branding & Maintenance Mode
+            </h3>
+            <form onSubmit={saveBrandingSettings} className="space-y-4">
+              <div>
+                <label className="label">System Name</label>
+                <input
+                  className="input"
+                  value={systemNameInput}
+                  onChange={e => setSystemNameInput(e.target.value)}
+                  placeholder="System Name (e.g. LifeOS Smart Campus)"
+                  required
+                />
+              </div>
+
+              <div>
+                <label className="label">System Logo</label>
+                <div className="flex items-center gap-4">
+                  {logoPreview ? (
+                    <img src={logoPreview} alt="Logo" className="w-12 h-12 object-contain rounded-xl border border-gray-200 dark:border-gray-700 bg-gray-50 p-1" />
+                  ) : (
+                    <div className="w-12 h-12 rounded-xl bg-gray-100 dark:bg-gray-800 flex items-center justify-center text-gray-400 text-xs font-semibold">
+                      No Logo
+                    </div>
+                  )}
+                  <label className="btn-secondary text-xs cursor-pointer flex items-center gap-2">
+                    <Upload size={14} /> Upload New Logo
+                    <input type="file" accept="image/*" onChange={handleLogoUpload} className="hidden" />
+                  </label>
+                </div>
+              </div>
+
+              <div className="p-4 rounded-xl bg-amber-50 dark:bg-amber-500/10 border border-amber-200/50 dark:border-amber-500/20">
+                <div className="flex items-center justify-between">
+                  <div className="space-y-0.5">
+                    <p className="font-semibold text-sm flex items-center gap-1.5 text-amber-900 dark:text-amber-300">
+                      <ShieldAlert size={16} /> Maintenance Mode
+                    </p>
+                    <p className="text-xs text-amber-700 dark:text-amber-400">
+                      When enabled, non-admin users are blocked from accessing student/teacher portals.
+                    </p>
+                  </div>
+                  <label className="relative inline-flex items-center cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={maintMode}
+                      onChange={e => setMaintMode(e.target.checked)}
+                      className="sr-only peer"
+                    />
+                    <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-amber-600"></div>
+                  </label>
+                </div>
+              </div>
+
+              <div>
+                <label className="label">Face Match Similarity Threshold (0.10 - 0.99)</label>
+                <div className="flex items-center gap-3">
+                  <input
+                    type="range"
+                    min="0.1"
+                    max="0.95"
+                    step="0.05"
+                    value={thresholdInput}
+                    onChange={e => setThresholdInput(e.target.value)}
+                    className="flex-1 h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer dark:bg-gray-700"
+                  />
+                  <span className="font-mono text-sm font-semibold w-12 text-right">{thresholdInput}</span>
+                </div>
+              </div>
+
+              <button type="submit" disabled={savingBranding} className="btn-primary w-full flex items-center justify-center gap-2">
+                {savingBranding ? <Loader size={16} className="animate-spin" /> : <Save size={16} />}
+                {savingBranding ? 'Saving Settings...' : 'Save Branding & System Settings'}
+              </button>
+            </form>
+          </Card>
+
           <Card>
             <h3 className="font-semibold mb-4 flex items-center gap-2"><Database size={18} className="text-emerald-500" /> System Information</h3>
             <div className="space-y-3 text-sm">
-              <div className="flex justify-between"><span className="text-gray-400">Application</span><span className="font-medium">LifeOS Smart Campus</span></div>
+              <div className="flex justify-between"><span className="text-gray-400">Application</span><span className="font-medium">{systemNameInput || 'LifeOS Smart Campus'}</span></div>
               <div className="flex justify-between"><span className="text-gray-400">Version</span><span className="font-medium">v1.0</span></div>
               <div className="flex justify-between"><span className="text-gray-400">Admin User</span><span className="font-medium">{user?.username}</span></div>
               <div className="flex justify-between"><span className="text-gray-400">Role</span><span className="font-medium capitalize">{user?.role}</span></div>
@@ -157,4 +294,4 @@ export default function Settings() {
       </div>
     </AdminLayout>
   )
-}
+}

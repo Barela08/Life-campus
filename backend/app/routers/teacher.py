@@ -47,16 +47,25 @@ def teacher_dashboard(user: models.User = Depends(security.require_roles("teache
     total_sessions = len(sessions)
     active_sessions = len([s for s in sessions if s.status == "active"])
 
+    session_ids = [s.id for s in sessions]
     records = db.query(models.AttendanceRecord).filter(
-        models.AttendanceRecord.session_id.in_([s.id for s in sessions])).all() if sessions else []
+        models.AttendanceRecord.session_id.in_(session_ids)).all() if session_ids else []
+    
     present = len([r for r in records if r.status == "present"])
     absent = len([r for r in records if r.status == "absent"])
+    
+    # Total enrolled students across teacher's department / classes
+    students_count = db.query(models.Student).filter(models.Student.department_id == teacher.department_id).count() if teacher.department_id else 0
+    total_marked = present + absent
+    pct = round(present / total_marked * 100, 2) if total_marked else 0.0
 
     return {
         "teacher_id": teacher.teacher_id, "full_name": teacher.full_name,
         "total_sessions": total_sessions, "active_sessions": active_sessions,
-        "present": present, "absent": absent,
+        "present": present, "absent": absent, "total_students": students_count,
+        "percentage": pct,
     }
+
 
 
 @router.get("/sessions")

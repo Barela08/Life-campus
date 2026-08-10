@@ -64,7 +64,7 @@ def forgot_password(req: schemas.ForgotPasswordRequest, db: Session = Depends(ge
         expires_at=datetime.utcnow() + timedelta(hours=1),
     ))
     db.commit()
-    return {"message": "If the email exists, a reset link has been sent", "dev_token": token}
+    return {"message": "If the email exists, a reset link has been sent"}
 
 
 @router.post("/reset-password")
@@ -84,15 +84,25 @@ def reset_password(req: schemas.ResetPasswordRequest, db: Session = Depends(get_
 
 @router.get("/me")
 def me(user: models.User = Depends(security.get_current_user)):
+    # Prefer student/teacher full_name if available (they can be updated independently)
+    full_name = user.full_name
+    phone = user.phone or ""
+    department_id = None
+    if user.role == "student" and user.student:
+        full_name = user.student.full_name or full_name
+        phone = user.student.phone or phone
+    if user.role == "teacher" and user.teacher:
+        full_name = user.teacher.full_name or full_name
+        phone = user.teacher.phone or phone
+        department_id = user.teacher.department_id
+    
     data = {"id": user.id, "username": user.username, "email": user.email,
-            "full_name": user.full_name, "role": user.role, "phone": user.phone or ""}
+            "full_name": full_name, "role": user.role, "phone": phone}
     if user.role == "student" and user.student:
         data["student_id"] = user.student.student_id
-        data["phone"] = user.student.phone
     if user.role == "teacher" and user.teacher:
         data["teacher_id"] = user.teacher.teacher_id
-        data["phone"] = user.teacher.phone
-        data["department_id"] = user.teacher.department_id
+        data["department_id"] = department_id
     return data
 
 
@@ -128,3 +138,23 @@ def update_me(req: schemas.ProfileUpdateRequest,
     db.commit()
     db.refresh(user)
     return {"message": "Profile updated successfully", "full_name": user.full_name, "email": user.email, "phone": user.phone or ""}
+
+
+@router.get("/branding")
+def get_public_branding(db: Session = Depends(get_db)):
+    """Public endpoint to retrieve application name, logo, and maintenance mode status."""
+    from ..config import settings
+    configs = db.query(models.SystemConfig).filter(
+        models.SystemConfig.key.in_(["system_name", "system_logo", "maintenance_mode",
+                                     "face_match_threshold"])
+    ).all()
+    cfg = {c.key: c.value for c in configs}
+    res = {
+        "system_name": cfg.get("system_name") or settings.APP_NAME,
+        "system_logo": cfg.get("system_logo") or "",
+        "maintenance_mode": cfg.get("maintenance_mode") or "false",
+        "face_match_threshold": cfg.get("face_match_threshold") or str(settings.FACE_MATCH_THRESHOLD),
+    }
+    return res
+
+

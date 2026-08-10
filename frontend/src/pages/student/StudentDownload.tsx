@@ -1,4 +1,5 @@
 import React from 'react'
+import api, { apiErrorMessage } from '../../lib/api'
 import StudentLayout from '../../components/StudentLayout'
 import { PageHeader } from '../../components/ui'
 import toast from 'react-hot-toast'
@@ -7,20 +8,21 @@ import { FileText, FileSpreadsheet, FileDown, Download } from 'lucide-react'
 export default function StudentDownload() {
   const download = async (format: string) => {
     try {
-      const token = localStorage.getItem('lifeos_token')
-      const res = await fetch(`/api/export/student-report?format=${format}`, {
-        headers: { Authorization: `Bearer ${token}` },
+      const res = await api.get(`/export/student-report?format=${format}`, {
+        responseType: 'blob',
       })
-      if (!res.ok) throw new Error('Failed')
-      const blob = await res.blob()
-      const url = URL.createObjectURL(blob)
+      const url = window.URL.createObjectURL(new Blob([res.data]))
       const a = document.createElement('a')
       a.href = url
       a.download = `student-report.${format}`
+      document.body.appendChild(a)
       a.click()
-      URL.revokeObjectURL(url)
+      a.remove()
+      window.URL.revokeObjectURL(url)
       toast.success(`Downloaded ${format.toUpperCase()} report`)
-    } catch (err: any) { toast.error(err.response?.data?.detail || 'Download failed') }
+    } catch (err: any) { 
+      toast.error(apiErrorMessage(err, 'Download failed')) 
+    }
   }
 
   const cards = [

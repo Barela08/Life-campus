@@ -1,31 +1,35 @@
 import React, { useEffect, useState } from 'react'
-import api from '../../lib/api'
+import api, { apiErrorMessage } from '../../lib/api'
 import StudentLayout from '../../components/StudentLayout'
 import { StatCard, PageHeader, Loading, Badge } from '../../components/ui'
 import { CalendarCheck, UserCheck, UserX, TrendingUp, Award } from 'lucide-react'
 import { Link } from 'react-router-dom'
+import { useAuth } from '../../store/auth'
 
 export default function StudentDashboard() {
+  const { user } = useAuth()
   const [data, setData] = useState<any>(null)
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
 
-  const load = async () => {
-    try { setData((await api.get('/student/dashboard')).data) } catch (e) { console.error(e) } finally { setLoading(false) }
-  }
-  useEffect(() => { load() }, [])
-
-  // Realtime updates — poll every 3s so attendance shows up immediately
   useEffect(() => {
-    const i = setInterval(() => { load() }, 3000)
-    return () => clearInterval(i)
+    api.get('/student/dashboard')
+      .then(res => setData(res.data))
+      .catch(err => {
+        console.error('Dashboard load error:', err)
+        setError(apiErrorMessage(err, 'Failed to load dashboard data'))
+      })
+      .finally(() => setLoading(false))
   }, [])
 
-  if (loading || !data) return <StudentLayout><Loading /></StudentLayout>
+  if (loading) return <StudentLayout><PageHeader title="Dashboard" /><div className="text-center p-8">Loading...</div></StudentLayout>
+  if (error) return <StudentLayout><PageHeader title="Dashboard" /><div className="text-center p-8 text-red-500">{error}</div></StudentLayout>
+  if (!data) return <StudentLayout><PageHeader title="Dashboard" /><div className="text-center p-8">No data available.</div></StudentLayout>
 
   return (
     <StudentLayout>
-      <PageHeader title="Student Dashboard" subtitle={`Welcome, ${data.full_name}`} />
-<div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+      <PageHeader title="Student Dashboard" subtitle={`Welcome, ${user?.full_name || 'Student'}`} />
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
         <StatCard icon={<CalendarCheck size={22} />} label="Total Classes" value={data.total} color="bg-primary-100 text-primary-600 dark:bg-primary-500/20 dark:text-primary-400" />
         <StatCard icon={<UserCheck size={22} />} label="Present" value={data.present} color="bg-emerald-100 text-emerald-600 dark:bg-emerald-500/20 dark:text-emerald-400" />
         <StatCard icon={<UserX size={22} />} label="Absent" value={data.absent} color="bg-red-100 text-red-600 dark:bg-red-500/20 dark:text-red-400" />
@@ -37,7 +41,7 @@ export default function StudentDashboard() {
             <h3 className="font-semibold flex items-center gap-2"><Award size={18} className="text-amber-500" /> Subject Attendance</h3>
             <Link to="/student/attendance" className="text-sm text-primary-500 hover:underline">View All</Link>
           </div>
-{(data.subjects || []).length === 0 ? <p className="text-gray-400 text-sm text-center py-6">No subject data yet</p> : (
+          {(data.subjects || []).length === 0 ? <p className="text-gray-400 text-sm text-center py-6">No subject data yet</p> : (
             <div className="space-y-3">
               {(data.subjects || []).map((s: any) => (
                 <div key={s.name} className="flex items-center justify-between">
@@ -55,7 +59,7 @@ export default function StudentDashboard() {
         </div>
         <div className="card p-5">
           <h3 className="font-semibold mb-4">Recent Attendance</h3>
-{(data.history || []).length === 0 ? <p className="text-gray-400 text-sm text-center py-6">No recent attendance</p> : (
+          {(data.history || []).length === 0 ? <p className="text-gray-400 text-sm text-center py-6">No recent attendance</p> : (
             <div className="overflow-x-auto">
               <table className="w-full">
                 <thead><tr className="border-b border-gray-100 dark:border-gray-800">

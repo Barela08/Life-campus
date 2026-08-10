@@ -1,6 +1,7 @@
 import React, { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../store/auth'
+import { useBranding } from '../store/branding'
 import toast from 'react-hot-toast'
 import { ShieldCheck, Eye, EyeOff, Loader2 } from 'lucide-react'
 import { useTheme } from '../store/theme'
@@ -9,6 +10,7 @@ import { Moon, Sun } from 'lucide-react'
 export default function Login() {
   const { login } = useAuth()
   const { dark, toggle } = useTheme()
+  const { systemName, systemLogo } = useBranding()
   const navigate = useNavigate()
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
@@ -49,12 +51,17 @@ export default function Login() {
       <div className="w-full max-w-md animate-slide-up">
         <div className="card p-8">
           <div className="flex flex-col items-center mb-8">
-            <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-primary-500 to-primary-700 flex items-center justify-center text-white text-2xl font-bold shadow-lg mb-4">
-              L
-            </div>
-            <h1 className="text-2xl font-bold tracking-tight">LifeOS Smart Campus</h1>
+            {systemLogo ? (
+              <img src={systemLogo} alt="System Logo" className="w-16 h-16 object-contain rounded-2xl mb-4 shadow-md" />
+            ) : (
+              <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-primary-500 to-primary-700 flex items-center justify-center text-white text-2xl font-bold shadow-lg mb-4">
+                {systemName.charAt(0)}
+              </div>
+            )}
+            <h1 className="text-2xl font-bold tracking-tight text-center">{systemName}</h1>
             <p className="text-sm text-gray-500 dark:text-gray-400 mt-1 text-center">AI Face Recognition Attendance System</p>
           </div>
+
 
           <form onSubmit={handleSubmit} className="space-y-4">
             <div>

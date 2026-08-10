@@ -423,9 +423,24 @@ def analytics(db: Session = Depends(get_db), _=admin_only):
 # ---------- Unknown logs ----------
 @router.get("/unknowns")
 def list_unknowns(db: Session = Depends(get_db), _=admin_only):
-    logs = db.query(models.UnknownFaceLog).order_by(models.UnknownFaceLog.detected_at.desc()).limit(50).all()
-    return [{"id": l.id, "snapshot": l.snapshot_path, "confidence": l.confidence,
-             "camera_id": l.camera_id, "detected_at": str(l.detected_at), "notified": l.notified} for l in logs]
+    logs = db.query(models.UnknownFaceLog).order_by(models.UnknownFaceLog.detected_at.desc()).limit(100).all()
+    return [{
+        "id": l.id,
+        "snapshot": l.snapshot_path,
+        "confidence": l.confidence,
+        "camera_id": l.camera_id,
+        "session_id": l.session_id,
+        "department": getattr(l, "department_name", "") or "",
+        "course": getattr(l, "course_name", "") or "",
+        "semester": getattr(l, "semester_name", "") or "",
+        "class_name": getattr(l, "class_name", "") or "",
+        "subject": getattr(l, "subject_name", "") or "",
+        "teacher": getattr(l, "teacher_name", "") or "",
+        "reason": getattr(l, "reason", "Unrecognized face") or "Unrecognized face",
+        "status": getattr(l, "status", "Unrecognized") or "Unrecognized",
+        "detected_at": str(l.detected_at),
+        "notified": l.notified
+    } for l in logs]
 
 
 # ---------- Audit logs ----------
@@ -451,11 +466,72 @@ def mark_notification_read(nid: int, db: Session = Depends(get_db), _=admin_only
     return {"message": "marked"}
 
 
+# ---------- System Settings & Branding ----------
+@router.get("/settings")
+def get_system_settings(db: Session = Depends(get_db), _=admin_only):
+    configs = db.query(models.SystemConfig).all()
+    res = {
+        "system_name": settings.APP_NAME,
+        "system_logo": "",
+        "maintenance_mode": "false",
+        "face_match_threshold": str(settings.FACE_MATCH_THRESHOLD),
+    }
+    for c in configs:
+        res[c.key] = c.value
+    return res
+
+
+@router.post("/settings")
+def save_system_settings(payload: dict, db: Session = Depends(get_db), _=admin_only):
+    for key, value in payload.items():
+        if value is None:
+            continue
+        val_str = str(value)
+        row = db.query(models.SystemConfig).filter(models.SystemConfig.key == key).first()
+        if row:
+            row.value = val_str
+        else:
+            db.add(models.SystemConfig(key=key, value=val_str))
+    db.commit()
+    return {"message": "Settings updated successfully"}
+
+
+@router.post("/settings/logo")
+def upload_system_logo(file: UploadFile = File(...), db: Session = Depends(get_db), _=admin_only):
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="No file provided")
+    ext = os.path.splitext(file.filename)[-1].lower()
+    if ext not in [".png", ".jpg", ".jpeg", ".svg", ".webp"]:
+        raise HTTPException(status_code=400, detail="Invalid file type. Allowed: PNG, JPG, JPEG, SVG, WEBP")
+    
+    branding_dir = settings.UPLOAD_DIR / "branding"
+    branding_dir.mkdir(parents=True, exist_ok=True)
+    filename = f"logo_{int(datetime.utcnow().timestamp())}{ext}"
+    target_path = branding_dir / filename
+    
+    content = file.file.read()
+    if len(content) > 2 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="File size exceeds 2MB limit")
+        
+    with open(target_path, "wb") as f:
+        f.write(content)
+        
+    logo_url = f"/uploads/branding/{filename}"
+    row = db.query(models.SystemConfig).filter(models.SystemConfig.key == "system_logo").first()
+    if row:
+        row.value = logo_url
+    else:
+        db.add(models.SystemConfig(key="system_logo", value=logo_url, description="System Logo Image Path"))
+    db.commit()
+    return {"message": "Logo uploaded successfully", "logo_url": logo_url}
+
+
 # ---------- Email Test ----------
 @router.post("/email/test")
 def test_email(req: schemas.TestEmailRequest,
                db: Session = Depends(get_db), _=admin_only):
     """Admin-only: test SMTP connection and optionally send a test email."""
+
     # 1. Test SMTP connection
     ok, msg = email_service.test_smtp_connection()
     if not ok:

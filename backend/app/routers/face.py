@@ -2,7 +2,6 @@ import base64
 from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from typing import Optional
 
 from ..database import get_db
 from .. import models, schemas, face_service, attendance_service, security, email_service
@@ -207,7 +206,6 @@ def match_face(req: schemas.FaceMatchRequest,
     if session.section:
         known_ids = known_ids.filter(models.Student.section == session.section)
     known_ids = [row[0] for row in known_ids.all()]
-
     known = db.query(models.FaceEmbedding).filter(models.FaceEmbedding.student_id.in_(known_ids)).all()
     if not known:
         db.add(models.AuditLog(user_id=user.id, action="attendance_failure",
@@ -242,10 +240,22 @@ def match_face(req: schemas.FaceMatchRequest,
                 "confidence": 0.0, "liveness": liveness}
 
     # ---- 6. Compare against known embeddings ----
+    dept_name = session.department.name if session.department else ""
+    cls_name = session.class_.name if session.class_ else ""
+    crs_name = session.class_.course.name if (session.class_ and session.class_.course) else ""
+    sem_name = session.class_.semester.name if (session.class_ and session.class_.semester) else ""
+    subj_name = session.subject.name if session.subject else ""
+    tchr_name = session.teacher.full_name if session.teacher else ""
+
     _, score, best = face_service.match_face(req.image_b64, known_list)
     if not best:
         snapshot = face_service.save_snapshot(req.image_b64, "unknowns")
-        db.add(models.UnknownFaceLog(snapshot_path=snapshot, confidence=0.0, camera_id=req.camera_id))
+        db.add(models.UnknownFaceLog(
+            snapshot_path=snapshot, confidence=0.0, camera_id=req.camera_id,
+            session_id=session.id, department_name=dept_name, course_name=crs_name,
+            semester_name=sem_name, class_name=cls_name, subject_name=subj_name,
+            teacher_name=tchr_name, reason="Unknown face detected", status="Unrecognized"
+        ))
         db.add(models.AuditLog(user_id=user.id, action="unknown_face", detail="No matching face found"))
         db.commit()
         return {"matched": False, "reason": "Unknown face", "confidence": 0.0, "liveness": liveness}
@@ -254,7 +264,13 @@ def match_face(req: schemas.FaceMatchRequest,
     threshold = get_config_threshold(db)
     if score < threshold:
         snapshot = face_service.save_snapshot(req.image_b64, "unknowns")
-        db.add(models.UnknownFaceLog(snapshot_path=snapshot, confidence=round(score, 3), camera_id=req.camera_id))
+        db.add(models.UnknownFaceLog(
+            snapshot_path=snapshot, confidence=round(score, 3), camera_id=req.camera_id,
+            session_id=session.id, department_name=dept_name, course_name=crs_name,
+            semester_name=sem_name, class_name=cls_name, subject_name=subj_name,
+            teacher_name=tchr_name, reason=f"Low similarity ({round(score, 3)} < {threshold})",
+            status="Low Confidence"
+        ))
         db.add(models.AuditLog(user_id=user.id, action="attendance_failure",
                                detail=f"Low confidence {round(score, 3)} vs threshold {threshold}"))
         db.commit()
@@ -356,13 +372,6 @@ def match_face(req: schemas.FaceMatchRequest,
         "email_sent": attendance_email_sent,
         "email_error": attendance_email_error,
     }
-
-
-@router.get("/config/threshold")
-def get_threshold(user: models.User = Depends(security.require_roles("admin")),
-                  db: Session = Depends(get_db)):
-    value = get_config_threshold(db)
-    return {"threshold": value, "engine": face_service.get_engine()}
 
 
 @router.post("/config/threshold")

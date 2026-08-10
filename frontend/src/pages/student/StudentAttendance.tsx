@@ -1,26 +1,51 @@
 import React, { useEffect, useState } from 'react'
-import api from '../../lib/api'
+import api, { apiErrorMessage } from '../../lib/api'
 import StudentLayout from '../../components/StudentLayout'
 import { PageHeader, Badge, Empty, Loading, SearchInput } from '../../components/ui'
 import toast from 'react-hot-toast'
-import { FileText, Download } from 'lucide-react'
+import { FileText, Download, Loader } from 'lucide-react'
 
 export default function StudentAttendance() {
   const [records, setRecords] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
+  const [downloading, setDownloading] = useState(false)
 
   const load = async () => {
     setLoading(true)
-    try { setRecords((await api.get('/student/attendance')).data) } catch { toast.error('Failed') } finally { setLoading(false) }
+    try { 
+      const res = await api.get('/student/attendance')
+      setRecords(res.data)
+    } catch (err) { 
+      toast.error(apiErrorMessage(err, 'Failed to load attendance records')) 
+    } finally { 
+      setLoading(false) 
+    }
   }
   useEffect(() => { load() }, [])
 
   const filtered = records.filter(r => (r.subject || '').toLowerCase().includes(search.toLowerCase()))
 
-  const download = () => {
-    const token = localStorage.getItem('lifeos_token')
-    window.open('/api/export/student-report', '_blank')
+  const download = async () => {
+    setDownloading(true)
+    try {
+      const res = await api.get('/export/student-report?format=pdf', { responseType: 'blob' })
+      const url = window.URL.createObjectURL(new Blob([res.data]))
+
+      const link = document.createElement('a')
+      link.href = url
+      const disp = res.headers['content-disposition']
+      const filename = disp ? disp.split('filename=')[1].replace(/"/g, '') : 'student-report.pdf'
+      link.setAttribute('download', filename)
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+      window.URL.revokeObjectURL(url)
+    } catch (err) {
+      toast.error(apiErrorMessage(err, 'Failed to download report'))
+    } finally {
+      setDownloading(false)
+    }
   }
 
   return (
@@ -28,7 +53,10 @@ export default function StudentAttendance() {
       <PageHeader
         title="My Attendance"
         subtitle="Your complete attendance record"
-        actions={<button onClick={download} className="btn-secondary flex items-center gap-2"><Download size={16} /> Download Report</button>}
+        actions={<button onClick={download} disabled={downloading} className="btn-secondary flex items-center gap-2">
+          {downloading ? <Loader size={16} className="animate-spin" /> : <Download size={16} />}
+          {downloading ? 'Downloading...' : 'Download Report'}
+        </button>}
       />
       <div className="mb-4"><SearchInput value={search} onChange={setSearch} placeholder="Search by subject..." /></div>
       {loading ? <Loading /> : filtered.length === 0 ? <Empty message="No attendance records" /> : (

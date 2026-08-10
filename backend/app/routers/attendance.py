@@ -156,13 +156,35 @@ def update_attendance_record(record_id: int, req: schemas.AttendanceRecordUpdate
         teacher = db.query(models.Teacher).filter(models.Teacher.user_id == user.id).first()
         if not teacher or not record.session or record.session.teacher_id != teacher.id:
             raise HTTPException(status_code=403, detail="Not allowed to edit this attendance record")
+    
+    old_status = record.status
     record.status = req.status
+    
+    # Audit log
+    db.add(models.AuditLog(
+        user_id=user.id,
+        action="attendance_corrected",
+        detail=f"Attendance for {record.student_name} on {record.date} changed from {old_status} to {req.status} by {user.full_name}"
+    ))
     db.commit()
     db.refresh(record)
-    return {"message": "Attendance record updated", "record": {
-        "id": record.id, "student_name": record.student_name, "status": record.status,
-        "date": str(record.date), "time": record.time, "method": record.method,
-    }}
+    
+    # Recalculate percentage for student
+    pct = attendance_service.compute_student_percentage(db, record.student_id)
+    
+    return {
+        "message": "Attendance updated successfully.",
+        "record": {
+            "id": record.id,
+            "student_name": record.student_name,
+            "status": record.status,
+            "date": str(record.date),
+            "time": record.time,
+            "method": record.method,
+            "student_percentage": pct,
+        }
+    }
+
 
 
 @router.get("/sessions")

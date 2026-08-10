@@ -424,7 +424,7 @@ git --version
 # 📦 BACKEND INSTALLATION
 
 ```powershell
-cd "C:\Users\hp\Downloads\Life campus\backend"
+cd backend"
 ```
 
 Create environment:
@@ -451,7 +451,7 @@ pip install -r requirements.txt
 # 📦 FRONTEND INSTALLATION
 
 ```powershell
-cd "C:\Users\hp\Downloads\Life campus\frontend"
+cd frontend"
 ```
 
 Install:
@@ -465,7 +465,7 @@ npm install
 # ▶️ RUN BACKEND
 
 ```powershell
-cd "C:\Users\hp\Downloads\Life campus\backend"
+cd backend"
 
 .\venv\Scripts\Activate.ps1
 

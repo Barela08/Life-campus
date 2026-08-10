@@ -1,6 +1,6 @@
 from datetime import date, datetime, timedelta
 from sqlalchemy.orm import Session
-from sqlalchemy import func, and_
+from sqlalchemy import func, and_, extract
 from . import models
 
 
@@ -20,13 +20,14 @@ def compute_student_percentage(db: Session, student_id: int, subject_id: int = N
 def monthly_percentage(db: Session, student_id: int, month: int, year: int) -> float:
     records = db.query(models.AttendanceRecord).filter(
         models.AttendanceRecord.student_id == student_id,
-        func.strftime("%m", models.AttendanceRecord.date) == f"{month:02d}",
-        func.strftime("%Y", models.AttendanceRecord.date) == str(year),
+        extract("month", models.AttendanceRecord.date) == month,
+        extract("year", models.AttendanceRecord.date) == year,
     ).all()
     if not records:
         return 0.0
     present = [r for r in records if r.status == "present"]
     return round(len(present) / len(records) * 100, 2)
+
 
 
 def is_duplicate(db: Session, session_id: int, student_id: int) -> bool:

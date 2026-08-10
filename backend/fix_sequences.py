@@ -40,4 +40,3 @@ for (table,) in tables:
 
 conn.commit()
 conn.close()
-print("\nSequence fix complete!")

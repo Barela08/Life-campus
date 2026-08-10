@@ -52,13 +52,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const u: User = {
       id: data.user_id,
       username,
-      email: '',
+      email: data.email || '',
       full_name: data.full_name,
       role: data.role,
       must_change_password: data.must_change_password,
     }
     localStorage.setItem('lifeos_user', JSON.stringify(u))
     setUser(u)
+    // Refresh to get role-specific data (student/teacher details)
+    setTimeout(() => refreshUser(), 0)
     return u
   }
 

@@ -1,7 +1,7 @@
 from datetime import date, datetime
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from sqlalchemy import func
+from sqlalchemy import func, extract
 from ..database import get_db
 from .. import models, schemas, security, attendance_service
 from ..email_service import send_leave_notification
@@ -76,9 +76,10 @@ def student_monthly(year: int = None, month: int = None,
         month = date.today().month
     records = db.query(models.AttendanceRecord).filter(
         models.AttendanceRecord.student_id == student.id,
-        func.strftime("%m", models.AttendanceRecord.date) == f"{month:02d}",
-        func.strftime("%Y", models.AttendanceRecord.date) == str(year),
+        extract("month", models.AttendanceRecord.date) == month,
+        extract("year", models.AttendanceRecord.date) == year,
     ).all()
+
     present = len([r for r in records if r.status == "present"])
     total = len(records)
     return {
@@ -95,6 +96,13 @@ def student_profile(user: models.User = Depends(security.require_roles("student"
     student = db.query(models.Student).filter(models.Student.user_id == user.id).first()
     if not student:
         raise HTTPException(status_code=404, detail="Student profile not found")
+    
+    # Calculate attendance percentage
+    records = db.query(models.AttendanceRecord).filter(models.AttendanceRecord.student_id == student.id).all()
+    total = len(records)
+    present = len([r for r in records if r.status == "present"])
+    attendance_percentage = round(present / total * 100, 2) if total else 0.0
+
     embeddings = db.query(models.FaceEmbedding).filter(models.FaceEmbedding.student_id == student.id).all()
     return {
         "id": student.id, "student_id": student.student_id, "full_name": student.full_name,
@@ -105,6 +113,7 @@ def student_profile(user: models.User = Depends(security.require_roles("student"
         "class_name": student.class_.name if student.class_ else "",
         "profile_photo": student.profile_photo, "face_status": student.face_status,
         "registered_angles": [e.angle for e in embeddings],
+        "attendance_percentage": attendance_percentage,
     }
 
 

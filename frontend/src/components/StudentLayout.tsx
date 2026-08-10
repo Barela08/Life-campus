@@ -2,6 +2,8 @@ import React, { useState } from 'react'
 import { NavLink, useNavigate, useLocation } from 'react-router-dom'
 import { useAuth } from '../store/auth'
 import { useTheme } from '../store/theme'
+import { useBranding } from '../store/branding'
+import MaintenanceMode from './MaintenanceMode'
 import { cn } from '../lib/utils'
 import {
   LayoutDashboard, CalendarCheck, Bell, UserCircle, LogOut, Moon, Sun,
@@ -13,10 +15,15 @@ interface NavItem { to: string; label: string; icon: React.ReactNode }
 export default function StudentLayout({ children }: { children: React.ReactNode }) {
   const { logout, user } = useAuth()
   const { dark, toggle } = useTheme()
+  const { systemName, systemLogo, maintenanceMode } = useBranding()
   const [open, setOpen] = useState(false)
   const navigate = useNavigate()
   const location = useLocation()
   const [notifOpen, setNotifOpen] = useState(false)
+
+  if (maintenanceMode && user?.role !== 'admin') {
+    return <MaintenanceMode />
+  }
 
   const navItems: NavItem[] = [
     { to: '/student', label: 'Dashboard', icon: <LayoutDashboard size={18} /> },
@@ -35,9 +42,15 @@ export default function StudentLayout({ children }: { children: React.ReactNode 
         open ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'
       )}>
         <div className="flex items-center gap-2 px-6 h-16 border-b border-gray-100 dark:border-gray-800">
-          <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-emerald-500 to-emerald-700 flex items-center justify-center text-white font-bold">S</div>
-          <div>
-            <p className="font-bold leading-tight">LifeOS</p>
+          {systemLogo ? (
+            <img src={systemLogo} alt="Logo" className="w-9 h-9 object-contain rounded-xl" />
+          ) : (
+            <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-emerald-500 to-emerald-700 flex items-center justify-center text-white font-bold">
+              {systemName.charAt(0)}
+            </div>
+          )}
+          <div className="truncate">
+            <p className="font-bold leading-tight truncate">{systemName}</p>
             <p className="text-[10px] text-gray-400 uppercase tracking-widest">Student Portal</p>
           </div>
         </div>
@@ -76,7 +89,7 @@ export default function StudentLayout({ children }: { children: React.ReactNode 
             <button onClick={() => setOpen(!open)} className="lg:hidden p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800">
               {open ? <X size={20} /> : <Menu size={20} />}
             </button>
-            <div className="lg:hidden font-bold"><span className="text-emerald-600">LifeOS</span> Student</div>
+            <div className="lg:hidden font-bold truncate"><span className="text-emerald-600">{systemName}</span> Student</div>
           </div>
           <div className="flex items-center gap-2">
             <button onClick={toggle} className="p-2 rounded-xl hover:bg-gray-100 dark:hover:bg-gray-800 transition">
@@ -95,7 +108,7 @@ export default function StudentLayout({ children }: { children: React.ReactNode 
             </div>
             <div className="flex items-center gap-2 pl-2 border-l border-gray-200 dark:border-gray-700">
               <div className="w-8 h-8 rounded-full bg-emerald-500 text-white flex items-center justify-center text-sm font-semibold">
-                {(user?.full_name || 'S').charAt(0)}
+                {(user?.full_name || 'S').charAt(0).toUpperCase()}
               </div>
               <span className="hidden sm:block text-sm font-medium">{user?.full_name || 'Student'}</span>
             </div>
@@ -110,3 +123,4 @@ export default function StudentLayout({ children }: { children: React.ReactNode 
     </div>
   )
 }
+

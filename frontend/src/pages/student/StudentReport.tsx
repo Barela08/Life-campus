@@ -1,26 +1,34 @@
 import React, { useEffect, useState } from 'react'
-import api from '../../lib/api'
+import api, { apiErrorMessage } from '../../lib/api'
 import StudentLayout from '../../components/StudentLayout'
-import { PageHeader, Badge, Loading } from '../../components/ui'
+import { PageHeader, Badge, Loading, Empty } from '../../components/ui'
 import toast from 'react-hot-toast'
 import { PieChart, TrendingUp, CalendarDays } from 'lucide-react'
 
 export default function StudentReport() {
   const [data, setData] = useState<any>(null)
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
   const [month, setMonth] = useState(new Date().getMonth() + 1)
   const [year, setYear] = useState(new Date().getFullYear())
 
   const load = async () => {
     setLoading(true)
+    setError('')
     try {
       const res = await api.get('/student/monthly', { params: { month, year } })
       setData(res.data)
-    } catch { toast.error('Failed to load') } finally { setLoading(false) }
+    } catch (err) {
+      setError(apiErrorMessage(err, 'Failed to load monthly report'))
+    } finally {
+      setLoading(false)
+    }
   }
   useEffect(() => { load() }, [month, year])
 
-  const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+  const currentYear = new Date().getFullYear()
+  const years = Array.from({ length: 5 }, (_, i) => currentYear - i)
 
   return (
     <StudentLayout>
@@ -30,10 +38,10 @@ export default function StudentReport() {
           {months.map((m, i) => <option key={m} value={i + 1}>{m}</option>)}
         </select>
         <select className="input" value={year} onChange={e => setYear(+e.target.value)}>
-          {[2024, 2025, 2026, 2027].map(y => <option key={y} value={y}>{y}</option>)}
+          {years.map(y => <option key={y} value={y}>{y}</option>)}
         </select>
       </div>
-      {loading ? <Loading /> : data && (
+      {loading ? <Loading /> : error ? <div className="text-red-500 text-center p-8">{error}</div> : data && (
         <>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
             <div className="card p-5 flex items-center gap-3">
@@ -51,7 +59,7 @@ export default function StudentReport() {
           </div>
           <div className="card p-5">
             <h3 className="font-semibold mb-4">Records — {months[data.month - 1]} {data.year}</h3>
-            {data.records.length === 0 ? <p className="text-gray-400 text-sm text-center py-8">No records for this month</p> : (
+            {data.records.length === 0 ? <Empty message="No records for this month" /> : (
               <div className="overflow-x-auto">
                 <table className="w-full">
                   <thead><tr className="border-b border-gray-100 dark:border-gray-800">
