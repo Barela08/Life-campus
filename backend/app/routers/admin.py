@@ -1,6 +1,7 @@
 import os
 from datetime import date, datetime
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from ..database import get_db
 from .. import models, schemas, security, email_service
@@ -9,6 +10,22 @@ from ..attendance_service import get_attendance_overview, compute_student_percen
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 admin_only = Depends(security.require_roles("admin"))
+
+
+def _commit_or_400(db: Session, message: str = "Database operation failed"):
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        detail = str(getattr(exc, "orig", exc))
+        raise HTTPException(status_code=409, detail=f"{message}: {detail}")
+
+
+def _update_fields(obj, data: dict):
+    for field, value in data.items():
+        if value == "":
+            value = None if field.endswith("_email") else value
+        setattr(obj, field, value)
 
 
 # ---------- Dashboard ----------
@@ -57,8 +74,19 @@ def delete_department(dept_id: int, db: Session = Depends(get_db), _=admin_only)
     d = db.query(models.Department).get(dept_id)
     if not d:
         raise HTTPException(status_code=404, detail="Department not found")
-    db.delete(d); db.commit()
+    db.delete(d); _commit_or_400(db, "Cannot delete this department because related records exist")
     return {"message": "Department deleted"}
+
+
+@router.put("/departments/{dept_id}", response_model=schemas.DepartmentOut)
+def update_department(dept_id: int, req: schemas.DepartmentUpdate, db: Session = Depends(get_db), _=admin_only):
+    d = db.query(models.Department).get(dept_id)
+    if not d:
+        raise HTTPException(status_code=404, detail="Department not found")
+    _update_fields(d, req.dict(exclude_unset=True))
+    _commit_or_400(db, "Department update failed")
+    db.refresh(d)
+    return d
 
 
 # ---------- Courses ----------
@@ -81,8 +109,19 @@ def delete_course(course_id: int, db: Session = Depends(get_db), _=admin_only):
     c = db.query(models.Course).get(course_id)
     if not c:
         raise HTTPException(status_code=404, detail="Course not found")
-    db.delete(c); db.commit()
+    db.delete(c); _commit_or_400(db, "Cannot delete this course because related records exist")
     return {"message": "Course deleted"}
+
+
+@router.put("/courses/{course_id}", response_model=schemas.CourseOut)
+def update_course(course_id: int, req: schemas.CourseUpdate, db: Session = Depends(get_db), _=admin_only):
+    c = db.query(models.Course).get(course_id)
+    if not c:
+        raise HTTPException(status_code=404, detail="Course not found")
+    _update_fields(c, req.dict(exclude_unset=True))
+    _commit_or_400(db, "Course update failed")
+    db.refresh(c)
+    return c
 
 
 # ---------- Semesters ----------
@@ -103,8 +142,19 @@ def delete_semester(sem_id: int, db: Session = Depends(get_db), _=admin_only):
     s = db.query(models.Semester).get(sem_id)
     if not s:
         raise HTTPException(status_code=404, detail="Semester not found")
-    db.delete(s); db.commit()
+    db.delete(s); _commit_or_400(db, "Cannot delete this semester because related records exist")
     return {"message": "Semester deleted"}
+
+
+@router.put("/semesters/{sem_id}", response_model=schemas.SemesterOut)
+def update_semester(sem_id: int, req: schemas.SemesterUpdate, db: Session = Depends(get_db), _=admin_only):
+    s = db.query(models.Semester).get(sem_id)
+    if not s:
+        raise HTTPException(status_code=404, detail="Semester not found")
+    _update_fields(s, req.dict(exclude_unset=True))
+    _commit_or_400(db, "Semester update failed")
+    db.refresh(s)
+    return s
 
 
 # ---------- Classes ----------
@@ -125,8 +175,19 @@ def delete_class(class_id: int, db: Session = Depends(get_db), _=admin_only):
     c = db.query(models.Class).get(class_id)
     if not c:
         raise HTTPException(status_code=404, detail="Class not found")
-    db.delete(c); db.commit()
+    db.delete(c); _commit_or_400(db, "Cannot delete this class because related records exist")
     return {"message": "Class deleted"}
+
+
+@router.put("/classes/{class_id}", response_model=schemas.ClassOut)
+def update_class(class_id: int, req: schemas.ClassUpdate, db: Session = Depends(get_db), _=admin_only):
+    c = db.query(models.Class).get(class_id)
+    if not c:
+        raise HTTPException(status_code=404, detail="Class not found")
+    _update_fields(c, req.dict(exclude_unset=True))
+    _commit_or_400(db, "Class update failed")
+    db.refresh(c)
+    return c
 
 
 # ---------- Subjects ----------
@@ -149,8 +210,19 @@ def delete_subject(subject_id: int, db: Session = Depends(get_db), _=admin_only)
     s = db.query(models.Subject).get(subject_id)
     if not s:
         raise HTTPException(status_code=404, detail="Subject not found")
-    db.delete(s); db.commit()
+    db.delete(s); _commit_or_400(db, "Cannot delete this subject because related records exist")
     return {"message": "Subject deleted"}
+
+
+@router.put("/subjects/{subject_id}", response_model=schemas.SubjectOut)
+def update_subject(subject_id: int, req: schemas.SubjectUpdate, db: Session = Depends(get_db), _=admin_only):
+    s = db.query(models.Subject).get(subject_id)
+    if not s:
+        raise HTTPException(status_code=404, detail="Subject not found")
+    _update_fields(s, req.dict(exclude_unset=True))
+    _commit_or_400(db, "Subject update failed")
+    db.refresh(s)
+    return s
 
 
 # ---------- Students ----------
@@ -187,9 +259,32 @@ def update_student(student_id: int, req: schemas.StudentUpdate, db: Session = De
     s = db.query(models.Student).get(student_id)
     if not s:
         raise HTTPException(status_code=404, detail="Student not found")
-    for field, value in req.dict(exclude_unset=True).items():
-        setattr(s, field, value)
-    db.commit(); db.refresh(s)
+    data = req.dict(exclude_unset=True)
+    password = data.pop("password", None)
+    if "student_id" in data:
+        existing = db.query(models.Student).filter(models.Student.student_id == data["student_id"], models.Student.id != s.id).first()
+        if existing:
+            raise HTTPException(status_code=409, detail="Student ID already exists")
+    if "email" in data:
+        existing = db.query(models.Student).filter(models.Student.email == str(data["email"]), models.Student.id != s.id).first()
+        if existing:
+            raise HTTPException(status_code=409, detail="Email already registered")
+        data["email"] = str(data["email"])
+    _update_fields(s, data)
+    if s.user:
+        if "full_name" in data:
+            s.user.full_name = s.full_name
+        if "email" in data:
+            s.user.email = s.email
+        if "student_id" in data:
+            s.user.username = s.student_id
+        if password:
+            if len(password) < 4:
+                raise HTTPException(status_code=400, detail="Password must be at least 4 characters")
+            s.user.hashed_password = security.hash_password(password)
+            s.user.must_change_password = True
+    _commit_or_400(db, "Student update failed")
+    db.refresh(s)
     return s
 
 
@@ -199,10 +294,13 @@ def delete_student(student_id: int, db: Session = Depends(get_db), _=admin_only)
     if not s:
         raise HTTPException(status_code=404, detail="Student not found")
     uid = s.user_id
-    db.delete(s); db.commit()
+    attendance_count = db.query(models.AttendanceRecord).filter(models.AttendanceRecord.student_id == s.id).count()
+    if attendance_count:
+        raise HTTPException(status_code=409, detail="Cannot delete this student because attendance records exist.")
+    db.delete(s); _commit_or_400(db, "Student delete failed")
     u = db.query(models.User).get(uid)
     if u:
-        db.delete(u); db.commit()
+        db.delete(u); _commit_or_400(db, "Student user delete failed")
     return {"message": "Student deleted"}
 
 
@@ -242,16 +340,52 @@ def list_teachers(db: Session = Depends(get_db), _=admin_only):
     return db.query(models.Teacher).all()
 
 
+@router.put("/teachers/{teacher_id}", response_model=schemas.TeacherOut)
+def update_teacher(teacher_id: int, req: schemas.TeacherUpdate, db: Session = Depends(get_db), _=admin_only):
+    t = db.query(models.Teacher).get(teacher_id)
+    if not t:
+        raise HTTPException(status_code=404, detail="Teacher not found")
+    data = req.dict(exclude_unset=True)
+    password = data.pop("password", None)
+    if "teacher_id" in data:
+        existing = db.query(models.Teacher).filter(models.Teacher.teacher_id == data["teacher_id"], models.Teacher.id != t.id).first()
+        if existing:
+            raise HTTPException(status_code=409, detail="Teacher ID already exists")
+    if "email" in data:
+        existing = db.query(models.Teacher).filter(models.Teacher.email == str(data["email"]), models.Teacher.id != t.id).first()
+        if existing:
+            raise HTTPException(status_code=409, detail="Email already registered")
+        data["email"] = str(data["email"])
+    _update_fields(t, data)
+    if t.user:
+        if "full_name" in data:
+            t.user.full_name = t.full_name
+        if "email" in data:
+            t.user.email = t.email
+        if "teacher_id" in data:
+            t.user.username = t.teacher_id
+        if password:
+            if len(password) < 4:
+                raise HTTPException(status_code=400, detail="Password must be at least 4 characters")
+            t.user.hashed_password = security.hash_password(password)
+    _commit_or_400(db, "Teacher update failed")
+    db.refresh(t)
+    return t
+
+
 @router.delete("/teachers/{teacher_id}")
 def delete_teacher(teacher_id: int, db: Session = Depends(get_db), _=admin_only):
     t = db.query(models.Teacher).get(teacher_id)
     if not t:
         raise HTTPException(status_code=404, detail="Teacher not found")
     uid = t.user_id
-    db.delete(t); db.commit()
+    session_count = db.query(models.AttendanceSession).filter(models.AttendanceSession.teacher_id == t.id).count()
+    if session_count:
+        raise HTTPException(status_code=409, detail="Cannot delete this teacher because attendance sessions exist.")
+    db.delete(t); _commit_or_400(db, "Teacher delete failed")
     u = db.query(models.User).get(uid)
     if u:
-        db.delete(u); db.commit()
+        db.delete(u); _commit_or_400(db, "Teacher user delete failed")
     return {"message": "Teacher deleted"}
 
 
@@ -362,6 +496,22 @@ def list_email_failures(db: Session = Depends(get_db), _=admin_only):
              "body_type": l.body_type, "error": l.error,
              "attendance_record_id": l.attendance_record_id,
              "retried": l.retried, "created_at": str(l.created_at)} for l in logs]
+
+
+@router.get("/email/logs")
+def list_email_logs(db: Session = Depends(get_db), _=admin_only):
+    logs = db.query(models.EmailLog).order_by(models.EmailLog.created_at.desc()).limit(100).all()
+    return [{
+        "id": l.id,
+        "student_id": getattr(l, "student_id", None),
+        "attendance_id": getattr(l, "attendance_id", None),
+        "recipient_email": getattr(l, "recipient_email", None) or l.to_email,
+        "subject": l.subject,
+        "status": l.status,
+        "error_message": getattr(l, "error_message", None) or l.error,
+        "sent_at": str(getattr(l, "sent_at", None) or l.created_at) if (getattr(l, "sent_at", None) or l.created_at) else None,
+        "created_at": str(l.created_at),
+    } for l in logs]
 
 
 @router.post("/email/failures/{log_id}/retry")

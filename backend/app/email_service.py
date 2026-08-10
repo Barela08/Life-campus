@@ -1,5 +1,6 @@
 import smtplib
 import time
+from datetime import datetime
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from sqlalchemy.orm import Session
@@ -9,9 +10,11 @@ from . import models
 
 
 def _send(to_email: str, subject: str, html_body: str, retries: int = 3) -> tuple[bool, str]:
-    if not settings.EMAIL_ENABLED or not settings.SMTP_USERNAME:
+    if not settings.EMAIL_ENABLED:
+        return False, "Email disabled (EMAIL_ENABLED=false)"
+    if not settings.SMTP_USERNAME or not settings.SMTP_PASSWORD:
         # Log disabled mode
-        return False, "Email disabled (EMAIL_ENABLED=false or SMTP_USERNAME not set)"
+        return False, "SMTP credentials not configured (SMTP_USERNAME / SMTP_PASSWORD)"
     last_err = ""
     for attempt in range(retries):
         try:
@@ -36,8 +39,20 @@ def _send(to_email: str, subject: str, html_body: str, retries: int = 3) -> tupl
     return False, last_err
 
 
-def log_email(db: Session, to_email: str, subject: str, body_type: str, status: str, error: str = ""):
-    db.add(models.EmailLog(to_email=to_email, subject=subject, body_type=body_type, status=status, error=error))
+def log_email(db: Session, to_email: str, subject: str, body_type: str, status: str, error: str = "",
+              student_id: int = None, attendance_id: int = None):
+    db.add(models.EmailLog(
+        student_id=student_id,
+        attendance_id=attendance_id,
+        recipient_email=to_email,
+        to_email=to_email,
+        subject=subject,
+        body_type=body_type,
+        status=status,
+        error_message=error,
+        error=error,
+        sent_at=datetime.utcnow() if status == "sent" else None,
+    ))
     db.commit()
 
 
@@ -65,7 +80,7 @@ def _attendance_html(student_name, roll_number, dept, course, semester, cls, sec
       </div>
       <div style="padding:28px">
         <p style="margin:0 0 16px;color:#374151;font-size:15px">Hello <b style="color:#111827">{student_name}</b>,</p>
-        <p style="margin:0 0 20px;color:#6b7280;font-size:14px">Your attendance has been recorded successfully. Here are your details:</p>
+        <p style="margin:0 0 20px;color:#6b7280;font-size:14px">Your attendance has been successfully marked.</p>
         <table style="width:100%;border-collapse:collapse;font-size:14px">
           <tr><td style="padding:10px;border-bottom:1px solid #f3f4f6;color:#6b7280;width:45%">Student Name</td><td style="padding:10px;border-bottom:1px solid #f3f4f6;font-weight:600;color:#111827">{student_name}</td></tr>
           <tr><td style="padding:10px;border-bottom:1px solid #f3f4f6;color:#6b7280">Roll Number</td><td style="padding:10px;border-bottom:1px solid #f3f4f6;font-weight:600;color:#111827">{roll_number or '-'}</td></tr>
@@ -95,12 +110,22 @@ def _attendance_html(student_name, roll_number, dept, course, semester, cls, sec
 def send_attendance_marked(db: Session, to_email: str, student_name: str, roll_number: str,
                            dept: str, course: str, semester: str, cls: str, section: str, subject: str,
                            teacher: str, date_str: str, time_str: str, confidence: float,
-                           overall_pct: float, monthly_pct: float):
-    subject_line = f"Attendance Marked Successfully - {student_name}"
+                           overall_pct: float, monthly_pct: float, student_id: int = None,
+                           attendance_id: int = None):
+    subject_line = "Attendance Marked Successfully – LifeOS Smart Campus"
+    if attendance_id:
+        existing = db.query(models.EmailLog).filter(
+            models.EmailLog.attendance_id == attendance_id,
+            models.EmailLog.body_type == "attendance_marked",
+            models.EmailLog.to_email == to_email,
+        ).first()
+        if existing:
+            return existing.status == "sent", existing.error_message or existing.error
     html = _attendance_html(student_name, roll_number, dept, course, semester, cls, section, subject,
                             teacher, date_str, time_str, "Present", confidence, overall_pct, monthly_pct)
     ok, err = _send(to_email, subject_line, html)
-    log_email(db, to_email, subject_line, "attendance_marked", "sent" if ok else "failed", err)
+    log_email(db, to_email, subject_line, "attendance_marked", "sent" if ok else "failed", err,
+              student_id=student_id, attendance_id=attendance_id)
     return ok, err
 
 
@@ -161,7 +186,7 @@ def send_monthly_report(db: Session, to_email: str, student_name: str, month: st
 
 
 def send_password_changed(db: Session, to_email: str, full_name: str):
-    subject_line = "Password Changed"
+    subject_line = "Your LifeOS Smart Campus password was changed successfully."
     html = f"""
     <div style="font-family:Segoe UI,Arial,sans-serif;max-width:600px;margin:auto;border:1px solid #e5e7eb;border-radius:16px;overflow:hidden">
       <div style="background:linear-gradient(135deg,#6366f1,#8b5cf6);padding:20px;color:#fff">

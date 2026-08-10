@@ -1,12 +1,13 @@
 import React, { useEffect, useState } from 'react'
-import api from '../../lib/api'
+import api, { apiErrorMessage } from '../../lib/api'
 import StudentLayout from '../../components/StudentLayout'
 import { PageHeader, Card, Badge } from '../../components/ui'
 import toast from 'react-hot-toast'
-import { Mail, Phone, Building2, User, Hash, GraduationCap } from 'lucide-react'
+import { Mail, Phone, Building2, User, Hash, GraduationCap, Save, Loader } from 'lucide-react'
 
 export default function StudentProfile() {
   const [profile, setProfile] = useState<any>(null)
+  const [savingProfile, setSavingProfile] = useState(false)
   const [oldP, setOldP] = useState('')
   const [newP, setNewP] = useState('')
   const [confirm, setConfirm] = useState('')
@@ -14,6 +15,25 @@ export default function StudentProfile() {
   useEffect(() => {
     api.get('/student/profile').then(res => setProfile(res.data)).catch(() => {})
   }, [])
+
+  const saveProfile = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setSavingProfile(true)
+    try {
+      await api.patch('/auth/me', {
+        full_name: profile.full_name,
+        email: profile.email,
+        phone: profile.phone,
+      })
+      const res = await api.get('/student/profile')
+      setProfile(res.data)
+      toast.success('Profile updated successfully')
+    } catch (err: any) {
+      toast.error(apiErrorMessage(err, 'Could not save profile'))
+    } finally {
+      setSavingProfile(false)
+    }
+  }
 
   const changePwd = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -37,7 +57,16 @@ export default function StudentProfile() {
               <div className="mt-1"><Badge variant={profile.face_status === 'approved' ? 'green' : 'yellow'}>{profile.face_status}</Badge></div>
             </div>
           </div>
-          <div className="space-y-3">
+          <form onSubmit={saveProfile} className="space-y-4">
+            <div><label className="label">Full Name</label><input className="input" required value={profile.full_name || ''} onChange={e => setProfile({ ...profile, full_name: e.target.value })} /></div>
+            <div><label className="label">Email</label><input className="input" type="email" required value={profile.email || ''} onChange={e => setProfile({ ...profile, email: e.target.value })} /></div>
+            <div><label className="label">Phone</label><input className="input" value={profile.phone || ''} onChange={e => setProfile({ ...profile, phone: e.target.value })} /></div>
+            <button type="submit" disabled={savingProfile} className="btn-primary flex items-center gap-2">
+              {savingProfile ? <Loader size={16} className="animate-spin" /> : <Save size={16} />}
+              {savingProfile ? 'Saving...' : 'Save Changes'}
+            </button>
+          </form>
+          <div className="space-y-3 mt-6">
             <div className="flex items-center gap-3 text-sm text-gray-600 dark:text-gray-300"><User size={16} className="text-gray-400" /> {profile.full_name}</div>
             <div className="flex items-center gap-3 text-sm text-gray-600 dark:text-gray-300"><Hash size={16} className="text-gray-400" /> Roll: {profile.roll_number}</div>
             <div className="flex items-center gap-3 text-sm text-gray-600 dark:text-gray-300"><Mail size={16} className="text-gray-400" /> {profile.email}</div>

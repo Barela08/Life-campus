@@ -299,23 +299,24 @@ def match_face(req: schemas.FaceMatchRequest,
     overall_pct = attendance_service.compute_student_percentage(db, student.id)
     monthly_pct = attendance_service.monthly_percentage(db, student.id, now.month, now.year)
 
-    recipients = set()
-    if student.email:
-        recipients.add(student.email)
-    if student.parent_email:
-        recipients.add(student.parent_email)
+    attendance_email_sent = False
+    attendance_email_error = ""
+    recipients = {student.email} if student.email else set()
 
     for rcpt in recipients:
         ok, err = email_service.send_attendance_marked(
             db, rcpt, student.full_name, student.roll_number, dept, course,
             sem, cls, session.section, session.subject.name if session.subject else "",
             teacher, now.strftime("%Y-%m-%d"), now.strftime("%H:%M:%S"),
-            score, overall_pct, monthly_pct,
+            score, overall_pct, monthly_pct, student_id=student.id, attendance_id=record.id,
         )
+        attendance_email_sent = attendance_email_sent or ok
+        if err:
+            attendance_email_error = err
         # If email fails, log it as a delivery failure (attendance is NOT rolled back)
         if not ok:
             db.add(models.EmailDeliveryFailureLog(
-                to_email=rcpt, subject=f"Attendance Marked Successfully - {student.full_name}",
+                to_email=rcpt, subject="Attendance Marked Successfully – LifeOS Smart Campus",
                 body_type="attendance_marked", error=err, attendance_record_id=record.id,
             ))
 
@@ -352,7 +353,8 @@ def match_face(req: schemas.FaceMatchRequest,
         "confidence": round(score, 3), "threshold": threshold,
         "status": record.status, "overall_percentage": overall_pct,
         "monthly_percentage": monthly_pct, "liveness": liveness,
-        "email_sent": len(recipients) > 0,
+        "email_sent": attendance_email_sent,
+        "email_error": attendance_email_error,
     }
 
 

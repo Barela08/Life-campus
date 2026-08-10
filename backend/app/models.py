@@ -10,6 +10,7 @@ class User(Base):
     username = Column(String, unique=True, index=True, nullable=False)
     email = Column(String, unique=True, index=True, nullable=False)
     full_name = Column(String, nullable=False)
+    phone = Column(String, default="")
     hashed_password = Column(String, nullable=False)
     role = Column(String, default="student")  # admin, teacher, student
     is_active = Column(Boolean, default=True)
@@ -211,11 +212,16 @@ class Notification(Base):
 class EmailLog(Base):
     __tablename__ = "email_logs"
     id = Column(Integer, primary_key=True, index=True)
+    student_id = Column(Integer, nullable=True, index=True)
+    attendance_id = Column(Integer, nullable=True, index=True)
+    recipient_email = Column(String, default="")
     to_email = Column(String, default="")
     subject = Column(String, default="")
     body_type = Column(String, default="")
-    status = Column(String, default="sent")  # sent, failed
+    status = Column(String, default="pending")  # pending, sent, failed
+    error_message = Column(Text, default="")
     error = Column(Text, default="")
+    sent_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
 

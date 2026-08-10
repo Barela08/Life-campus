@@ -3,6 +3,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
+from sqlalchemy import inspect, text
 from sqlalchemy.orm import Session
 
 from .config import settings
@@ -28,9 +29,34 @@ def seed_admin():
     db.close()
 
 
+def ensure_schema_updates():
+    inspector = inspect(engine)
+    if "users" in inspector.get_table_names():
+        user_columns = {col["name"] for col in inspector.get_columns("users")}
+        if "phone" not in user_columns:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE users ADD COLUMN phone VARCHAR DEFAULT ''"))
+    if "email_logs" not in inspector.get_table_names():
+        return
+    existing = {col["name"] for col in inspector.get_columns("email_logs")}
+    desired = {
+        "student_id": "INTEGER",
+        "attendance_id": "INTEGER",
+        "recipient_email": "VARCHAR DEFAULT ''",
+        "error_message": "TEXT DEFAULT ''",
+        "sent_at": "DATETIME",
+    }
+    with engine.begin() as conn:
+        for column, ddl in desired.items():
+            if column in existing:
+                continue
+            conn.execute(text(f"ALTER TABLE email_logs ADD COLUMN {column} {ddl}"))
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     Base.metadata.create_all(bind=engine)
+    ensure_schema_updates()
     seed_admin()
     yield
 

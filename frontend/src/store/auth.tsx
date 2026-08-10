@@ -80,7 +80,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const updateProfile = async (data: Partial<User>) => {
     const res = await api.patch('/auth/me', data)
-    const updated = { ...user!, ...data, full_name: res.data.full_name, email: res.data.email }
+    const updated = { ...user!, ...data, full_name: res.data.full_name, email: res.data.email, phone: res.data.phone }
     localStorage.setItem('lifeos_user', JSON.stringify(updated))
     setUser(updated)
     return updated

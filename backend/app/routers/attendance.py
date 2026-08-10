@@ -143,6 +143,28 @@ def attendance_records(date: date = None, student_id: int = None, class_id: int 
              "method": r.method, "teacher": r.teacher} for r in records]
 
 
+@router.put("/records/{record_id}")
+def update_attendance_record(record_id: int, req: schemas.AttendanceRecordUpdate,
+                             user: models.User = Depends(security.require_roles("teacher", "admin")),
+                             db: Session = Depends(get_db)):
+    if req.status not in {"present", "absent", "late"}:
+        raise HTTPException(status_code=400, detail="Status must be present, absent, or late")
+    record = db.query(models.AttendanceRecord).get(record_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="Attendance record not found")
+    if user.role == "teacher":
+        teacher = db.query(models.Teacher).filter(models.Teacher.user_id == user.id).first()
+        if not teacher or not record.session or record.session.teacher_id != teacher.id:
+            raise HTTPException(status_code=403, detail="Not allowed to edit this attendance record")
+    record.status = req.status
+    db.commit()
+    db.refresh(record)
+    return {"message": "Attendance record updated", "record": {
+        "id": record.id, "student_name": record.student_name, "status": record.status,
+        "date": str(record.date), "time": record.time, "method": record.method,
+    }}
+
+
 @router.get("/sessions")
 def list_sessions(db: Session = Depends(get_db)):
     sessions = db.query(models.AttendanceSession).order_by(models.AttendanceSession.started_at.desc()).limit(50).all()

@@ -1,9 +1,9 @@
 import React, { useEffect, useState } from 'react'
-import api from '../../lib/api'
+import api, { apiErrorMessage } from '../../lib/api'
 import AdminLayout from '../../components/AdminLayout'
 import { PageHeader, Modal, Empty, Loading, Badge } from '../../components/ui'
 import toast from 'react-hot-toast'
-import { Plus, Trash2, BookOpen, Layers } from 'lucide-react'
+import { Plus, Trash2, Pencil } from 'lucide-react'
 
 export default function Courses() {
   const [courses, setCourses] = useState<any[]>([])
@@ -31,17 +31,26 @@ export default function Courses() {
   const save = async (e: React.FormEvent) => {
     e.preventDefault()
     try {
-      if (tab === 'courses') await api.post('/admin/courses', form)
-      else if (tab === 'subjects') await api.post('/admin/subjects', form)
-      else if (tab === 'semesters') await api.post('/admin/semesters', form)
-      else await api.post('/admin/classes', form)
-      toast.success('Created'); setModal(false); load()
-    } catch (err: any) { toast.error(err.response?.data?.detail || 'Failed') }
+      const payload = { ...form }
+      if ('department_id' in payload) payload.department_id = +payload.department_id
+      if ('course_id' in payload) payload.course_id = +payload.course_id
+      if ('semester_id' in payload) payload.semester_id = +payload.semester_id
+      if ('order' in payload) payload.order = +payload.order
+      if (form.id) {
+        const { id, ...body } = payload
+        await api.put(`/admin/${tab}/${id}`, body)
+        toast.success('Updated')
+      } else {
+        await api.post(`/admin/${tab}`, payload)
+        toast.success('Created')
+      }
+      setModal(false); load()
+    } catch (err: any) { toast.error(apiErrorMessage(err, 'Failed to save')) }
   }
 
   const remove = async (kind: string, id: number) => {
     if (!confirm('Delete?')) return
-    try { await api.delete(`/admin/${kind}/${id}`); toast.success('Deleted'); load() } catch { toast.error('Failed') }
+    try { await api.delete(`/admin/${kind}/${id}`); toast.success('Deleted'); load() } catch (err: any) { toast.error(apiErrorMessage(err, 'Failed to delete')) }
   }
 
   const tabs = [
@@ -82,28 +91,40 @@ export default function Courses() {
                   <tr key={c.id} className="border-b border-gray-50 hover:bg-gray-50 dark:hover:bg-gray-800/50">
                     <td className="table-cell font-medium">{c.name}</td><td className="table-cell">{c.code}</td>
                     <td className="table-cell">{deptName(c.department_id)}</td>
-                    <td className="table-cell text-right"><button onClick={() => remove('courses', c.id)} className="p-1.5 rounded-lg hover:bg-red-50 text-red-500"><Trash2 size={16} /></button></td>
+                    <td className="table-cell text-right">
+                      <button onClick={() => { setForm(c); setModal(true) }} className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800"><Pencil size={16} /></button>
+                      <button onClick={() => remove('courses', c.id)} className="p-1.5 rounded-lg hover:bg-red-50 text-red-500"><Trash2 size={16} /></button>
+                    </td>
                   </tr>
                 ))}
                 {tab === 'subjects' && subjects.map(s => (
                   <tr key={s.id} className="border-b border-gray-50 hover:bg-gray-50 dark:hover:bg-gray-800/50">
                     <td className="table-cell font-medium">{s.name}</td><td className="table-cell">{s.code}</td>
                     <td className="table-cell">{deptName(s.department_id)}</td>
-                    <td className="table-cell text-right"><button onClick={() => remove('subjects', s.id)} className="p-1.5 rounded-lg hover:bg-red-50 text-red-500"><Trash2 size={16} /></button></td>
+                    <td className="table-cell text-right">
+                      <button onClick={() => { setForm(s); setModal(true) }} className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800"><Pencil size={16} /></button>
+                      <button onClick={() => remove('subjects', s.id)} className="p-1.5 rounded-lg hover:bg-red-50 text-red-500"><Trash2 size={16} /></button>
+                    </td>
                   </tr>
                 ))}
                 {tab === 'semesters' && semesters.map(s => (
                   <tr key={s.id} className="border-b border-gray-50 hover:bg-gray-50 dark:hover:bg-gray-800/50">
                     <td className="table-cell font-medium">{s.name}</td><td className="table-cell">{s.code}</td>
                     <td className="table-cell">{s.order}</td>
-                    <td className="table-cell text-right"><button onClick={() => remove('semesters', s.id)} className="p-1.5 rounded-lg hover:bg-red-50 text-red-500"><Trash2 size={16} /></button></td>
+                    <td className="table-cell text-right">
+                      <button onClick={() => { setForm(s); setModal(true) }} className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800"><Pencil size={16} /></button>
+                      <button onClick={() => remove('semesters', s.id)} className="p-1.5 rounded-lg hover:bg-red-50 text-red-500"><Trash2 size={16} /></button>
+                    </td>
                   </tr>
                 ))}
                 {tab === 'classes' && classes.map(c => (
                   <tr key={c.id} className="border-b border-gray-50 hover:bg-gray-50 dark:hover:bg-gray-800/50">
                     <td className="table-cell font-medium">{c.name}</td><td className="table-cell">{c.code}</td>
                     <td className="table-cell">{courses.find(co => co.id === c.course_id)?.name || '-'}</td>
-                    <td className="table-cell text-right"><button onClick={() => remove('classes', c.id)} className="p-1.5 rounded-lg hover:bg-red-50 text-red-500"><Trash2 size={16} /></button></td>
+                    <td className="table-cell text-right">
+                      <button onClick={() => { setForm(c); setModal(true) }} className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800"><Pencil size={16} /></button>
+                      <button onClick={() => remove('classes', c.id)} className="p-1.5 rounded-lg hover:bg-red-50 text-red-500"><Trash2 size={16} /></button>
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -112,7 +133,7 @@ export default function Courses() {
         </div>
       )}
 
-      <Modal open={modal} onClose={() => setModal(false)} title={`Add ${tab.slice(0, -1)}`}>
+      <Modal open={modal} onClose={() => setModal(false)} title={`${form.id ? 'Edit' : 'Add'} ${tab.slice(0, -1)}`}>
         <form onSubmit={save} className="space-y-4">
           <div><label className="label">Name</label><input className="input" required value={form.name || ''} onChange={e => setForm({ ...form, name: e.target.value })} /></div>
           <div><label className="label">Code</label><input className="input" required value={form.code || ''} onChange={e => setForm({ ...form, code: e.target.value })} /></div>

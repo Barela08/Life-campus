@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react'
-import api from '../../lib/api'
+import api, { apiErrorMessage } from '../../lib/api'
 import AdminLayout from '../../components/AdminLayout'
 import { PageHeader, Modal, SearchInput, Badge, Empty, Loading } from '../../components/ui'
 import toast from 'react-hot-toast'
@@ -64,21 +64,30 @@ export default function Students() {
     setSaving(true)
     try {
       if (form.id) {
-        const { id, student_id, full_name, roll_number, section, department_id, course_id, semester_id, class_id, phone, parent_email } = form
-        await api.put(`/admin/students/${id}`, { full_name, roll_number, section, department_id: +department_id, course_id: +course_id, semester_id: +semester_id, class_id: +class_id, phone, parent_email })
+        const { id, student_id, full_name, email, roll_number, section, department_id, course_id, semester_id, class_id, phone, parent_email, password } = form
+        const payload: any = {
+          student_id, full_name, email, roll_number, section,
+          department_id: +department_id, course_id: +course_id,
+          semester_id: +semester_id, class_id: +class_id,
+          phone, parent_email: parent_email || null,
+        }
+        if (password) payload.password = password
+        const res = await api.put(`/admin/students/${id}`, payload)
+        setStudents(prev => prev.map(s => (s.id === id ? res.data : s)))
       } else {
-        await api.post('/admin/students', form)
+        const res = await api.post('/admin/students', form)
+        setStudents(prev => [res.data, ...prev])
       }
       toast.success(form.id ? 'Student updated' : 'Student added')
       setModal(false)
-      load()
-    } catch (err: any) { toast.error(err.response?.data?.detail || 'Failed to save') } finally { setSaving(false) }
+      await load()
+    } catch (err: any) { toast.error(apiErrorMessage(err, 'Failed to save')) } finally { setSaving(false) }
   }
 
   const remove = async (s: Student) => {
     if (!confirm(`Delete ${s.full_name}?`)) return
-    try { await api.delete(`/admin/students/${s.id}`); toast.success('Student deleted'); load() }
-    catch { toast.error('Failed to delete') }
+    try { await api.delete(`/admin/students/${s.id}`); toast.success('Student deleted'); setStudents(prev => prev.filter(item => item.id !== s.id)); load() }
+    catch (err: any) { toast.error(apiErrorMessage(err, 'Failed to delete')) }
   }
 
   const approveFace = async (s: Student) => {
@@ -183,7 +192,7 @@ export default function Students() {
           <div><label className="label">Email</label><input className="input" type="email" required value={form.email || ''} onChange={e => setForm({ ...form, email: e.target.value })} /></div>
           <div><label className="label">Phone</label><input className="input" value={form.phone || ''} onChange={e => setForm({ ...form, phone: e.target.value })} /></div>
           <div><label className="label">Parent Email (optional)</label><input className="input" type="email" value={form.parent_email || ''} onChange={e => setForm({ ...form, parent_email: e.target.value })} /></div>
-          {!form.id && <div><label className="label">Default Password</label><input className="input" value={form.password || '1234'} onChange={e => setForm({ ...form, password: e.target.value })} /></div>}
+          <div><label className="label">{form.id ? 'New Password (optional)' : 'Default Password'}</label><input className="input" type="password" value={form.password || ''} placeholder={form.id ? 'Leave blank to keep current password' : '1234'} onChange={e => setForm({ ...form, password: e.target.value })} /></div>
           <div className="sm:col-span-2 flex justify-end gap-2 pt-2">
             <button type="button" onClick={() => setModal(false)} className="btn-secondary">Cancel</button>
             <button type="submit" disabled={saving} className="btn-primary flex items-center gap-2"><UserPlus size={16} /> {saving ? 'Saving...' : 'Save'}</button>

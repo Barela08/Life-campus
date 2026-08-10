@@ -79,6 +79,13 @@ class CourseCreate(BaseModel):
     department_id: int
 
 
+class CourseUpdate(BaseModel):
+    name: Optional[str] = None
+    code: Optional[str] = None
+    duration: Optional[str] = None
+    department_id: Optional[int] = None
+
+
 class CourseOut(BaseModel):
     id: int
     name: str
@@ -96,6 +103,12 @@ class SemesterCreate(BaseModel):
     name: str
     code: str
     order: int = 1
+
+
+class SemesterUpdate(BaseModel):
+    name: Optional[str] = None
+    code: Optional[str] = None
+    order: Optional[int] = None
 
 
 class SemesterOut(BaseModel):
@@ -117,6 +130,13 @@ class ClassCreate(BaseModel):
     semester_id: int
 
 
+class ClassUpdate(BaseModel):
+    name: Optional[str] = None
+    code: Optional[str] = None
+    course_id: Optional[int] = None
+    semester_id: Optional[int] = None
+
+
 class ClassOut(BaseModel):
     id: int
     name: str
@@ -134,6 +154,12 @@ class SubjectCreate(BaseModel):
     name: str
     code: str
     department_id: int
+
+
+class SubjectUpdate(BaseModel):
+    name: Optional[str] = None
+    code: Optional[str] = None
+    department_id: Optional[int] = None
 
 
 class SubjectOut(BaseModel):
@@ -165,6 +191,8 @@ class StudentCreate(BaseModel):
 
 class StudentUpdate(BaseModel):
     full_name: Optional[str] = None
+    student_id: Optional[str] = None
+    email: Optional[EmailStr] = None
     roll_number: Optional[str] = None
     section: Optional[str] = None
     department_id: Optional[int] = None
@@ -173,6 +201,7 @@ class StudentUpdate(BaseModel):
     class_id: Optional[int] = None
     phone: Optional[str] = None
     parent_email: Optional[EmailStr] = None
+    password: Optional[str] = None
 
 
 class StudentOut(BaseModel):
@@ -205,6 +234,15 @@ class TeacherCreate(BaseModel):
     phone: str = ""
     department_id: int
     password: str = "1234"
+
+
+class TeacherUpdate(BaseModel):
+    full_name: Optional[str] = None
+    teacher_id: Optional[str] = None
+    email: Optional[EmailStr] = None
+    phone: Optional[str] = None
+    department_id: Optional[int] = None
+    password: Optional[str] = None
 
 
 class TeacherOut(BaseModel):
@@ -240,6 +278,10 @@ class ManualAttendanceRequest(BaseModel):
     session_id: int
     student_id: int
     status: str = "present"
+
+
+class AttendanceRecordUpdate(BaseModel):
+    status: str
 
 
 class FaceMatchRequest(BaseModel):

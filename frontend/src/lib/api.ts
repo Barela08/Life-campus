@@ -1,7 +1,7 @@
 import axios from 'axios'
 
 const api = axios.create({
-  baseURL: '/api',
+  baseURL: import.meta.env.VITE_API_BASE_URL || '/api',
   headers: { 'Content-Type': 'application/json' },
 })
 
@@ -30,3 +30,12 @@ api.interceptors.response.use(
 )
 
 export default api
+
+export function apiErrorMessage(err: any, fallback = 'Request failed') {
+  const detail = err?.response?.data?.detail
+  if (Array.isArray(detail)) {
+    return detail.map((d: any) => d?.msg || JSON.stringify(d)).join(', ')
+  }
+  if (detail) return String(detail)
+  return err?.response?.data?.message || err?.message || fallback
+}

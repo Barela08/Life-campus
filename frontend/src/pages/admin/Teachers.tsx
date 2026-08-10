@@ -1,16 +1,16 @@
 import React, { useEffect, useState } from 'react'
-import api from '../../lib/api'
+import api, { apiErrorMessage } from '../../lib/api'
 import AdminLayout from '../../components/AdminLayout'
 import { PageHeader, Modal, Empty, Loading, SearchInput } from '../../components/ui'
 import toast from 'react-hot-toast'
-import { Plus, Trash2, GraduationCap } from 'lucide-react'
+import { Plus, Trash2, GraduationCap, Pencil } from 'lucide-react'
 
 export default function Teachers() {
   const [teachers, setTeachers] = useState<any[]>([])
   const [depts, setDepts] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
-const [modal, setModal] = useState(false)
+  const [modal, setModal] = useState(false)
   const [form, setForm] = useState<any>({ password: '1234' })
 
   const load = async () => {
@@ -24,13 +24,33 @@ const [modal, setModal] = useState(false)
 
   const save = async (e: React.FormEvent) => {
     e.preventDefault()
-    try { await api.post('/admin/teachers', form); toast.success('Teacher added'); setModal(false); load() }
-    catch (err: any) { toast.error(err.response?.data?.detail || 'Failed') }
+    try {
+      if (form.id) {
+        const payload: any = {
+          full_name: form.full_name,
+          teacher_id: form.teacher_id,
+          email: form.email,
+          phone: form.phone,
+          department_id: +form.department_id,
+        }
+        if (form.password) payload.password = form.password
+        const res = await api.put(`/admin/teachers/${form.id}`, payload)
+        setTeachers(prev => prev.map(t => (t.id === form.id ? res.data : t)))
+        toast.success('Teacher updated')
+      } else {
+        const res = await api.post('/admin/teachers', { ...form, department_id: +form.department_id })
+        setTeachers(prev => [res.data, ...prev])
+        toast.success('Teacher added')
+      }
+      setModal(false)
+      await load()
+    }
+    catch (err: any) { toast.error(apiErrorMessage(err, 'Failed to save')) }
   }
 
   const remove = async (id: number) => {
     if (!confirm('Delete teacher?')) return
-    try { await api.delete(`/admin/teachers/${id}`); toast.success('Deleted'); load() } catch { toast.error('Failed') }
+    try { await api.delete(`/admin/teachers/${id}`); toast.success('Deleted'); setTeachers(prev => prev.filter(t => t.id !== id)); load() } catch (err: any) { toast.error(apiErrorMessage(err, 'Failed to delete')) }
   }
 
   const filtered = teachers.filter(t => t.full_name.toLowerCase().includes(search.toLowerCase()) || t.teacher_id.toLowerCase().includes(search.toLowerCase()))
@@ -56,12 +76,15 @@ const [modal, setModal] = useState(false)
                   <p className="text-xs text-gray-400 mt-0.5">{depts.find(d => d.id === t.department_id)?.name || '-'}</p>
                 </div>
               </div>
-              <button onClick={() => remove(t.id)} className="p-2 rounded-lg hover:bg-red-50 text-red-500"><Trash2 size={16} /></button>
+              <div className="flex gap-1">
+                <button onClick={() => { setForm({ ...t, password: '' }); setModal(true) }} className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800"><Pencil size={16} /></button>
+                <button onClick={() => remove(t.id)} className="p-2 rounded-lg hover:bg-red-50 text-red-500"><Trash2 size={16} /></button>
+              </div>
             </div>
           ))}
         </div>
       )}
-      <Modal open={modal} onClose={() => setModal(false)} title="Add Teacher">
+      <Modal open={modal} onClose={() => setModal(false)} title={form.id ? 'Edit Teacher' : 'Add Teacher'}>
         <form onSubmit={save} className="space-y-4">
           <div><label className="label">Full Name</label><input className="input" required value={form.full_name || ''} onChange={e => setForm({ ...form, full_name: e.target.value })} /></div>
           <div><label className="label">Teacher ID</label><input className="input" required value={form.teacher_id || ''} onChange={e => setForm({ ...form, teacher_id: e.target.value })} /></div>
@@ -71,7 +94,7 @@ const [modal, setModal] = useState(false)
             <select className="input" required value={form.department_id || ''} onChange={e => setForm({ ...form, department_id: e.target.value })}>
               <option value="">Select</option>{depts.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
             </select></div>
-          <div><label className="label">Password</label><input className="input" value={form.password || '1234'} onChange={e => setForm({ ...form, password: e.target.value })} /></div>
+          <div><label className="label">{form.id ? 'New Password (optional)' : 'Password'}</label><input className="input" type="password" value={form.password || ''} placeholder={form.id ? 'Leave blank to keep current password' : '1234'} onChange={e => setForm({ ...form, password: e.target.value })} /></div>
           <div className="flex justify-end gap-2"><button type="button" onClick={() => setModal(false)} className="btn-secondary">Cancel</button><button className="btn-primary">Save</button></div>
         </form>
       </Modal>

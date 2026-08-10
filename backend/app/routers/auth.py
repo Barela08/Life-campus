@@ -85,7 +85,7 @@ def reset_password(req: schemas.ResetPasswordRequest, db: Session = Depends(get_
 @router.get("/me")
 def me(user: models.User = Depends(security.get_current_user)):
     data = {"id": user.id, "username": user.username, "email": user.email,
-            "full_name": user.full_name, "role": user.role}
+            "full_name": user.full_name, "role": user.role, "phone": user.phone or ""}
     if user.role == "student" and user.student:
         data["student_id"] = user.student.student_id
         data["phone"] = user.student.phone
@@ -120,10 +120,11 @@ def update_me(req: schemas.ProfileUpdateRequest,
             user.student.email = str(req.email)
     # Phone is stored on teacher/student profile
     if req.phone is not None:
+        user.phone = req.phone
         if user.teacher:
             user.teacher.phone = req.phone
         if user.student:
             user.student.phone = req.phone
     db.commit()
     db.refresh(user)
-    return {"message": "Profile updated successfully", "full_name": user.full_name, "email": user.email}
+    return {"message": "Profile updated successfully", "full_name": user.full_name, "email": user.email, "phone": user.phone or ""}
