@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react'
+ import React, { useEffect, useState } from 'react'
 import api from '../../lib/api'
 import TeacherLayout from '../../components/TeacherLayout'
 import { StatCard, PageHeader, Loading, Badge } from '../../components/ui'
@@ -12,13 +12,18 @@ export default function TeacherDashboard() {
   const navigate = useNavigate()
 
   const load = async () => {
-    setLoading(true)
     try {
       const [d, s] = await Promise.all([api.get('/teacher/dashboard'), api.get('/teacher/sessions')])
       setData(d.data); setSessions(s.data)
     } catch (e) { console.error(e) } finally { setLoading(false) }
   }
   useEffect(() => { load() }, [])
+
+  // Realtime updates — poll every 3s so attendance shows up immediately
+  useEffect(() => {
+    const i = setInterval(() => { load() }, 3000)
+    return () => clearInterval(i)
+  }, [])
 
   if (loading || !data) return <TeacherLayout><Loading /></TeacherLayout>
 

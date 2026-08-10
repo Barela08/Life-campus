@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react'
+ import React, { useEffect, useState } from 'react'
 import api from '../../lib/api'
 import AdminLayout from '../../components/AdminLayout'
 import { StatCard, Badge, Loading, PageHeader } from '../../components/ui'
@@ -30,6 +30,12 @@ export default function AdminDashboard() {
   }
 
   useEffect(() => { load() }, [])
+
+  // Realtime updates — poll every 3s so attendance shows up immediately
+  useEffect(() => {
+    const i = setInterval(() => { load() }, 3000)
+    return () => clearInterval(i)
+  }, [])
 
   if (loading || !data) return <AdminLayout><Loading /></AdminLayout>
 

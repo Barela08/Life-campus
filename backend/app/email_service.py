@@ -16,7 +16,9 @@ def _send(to_email: str, subject: str, html_body: str, retries: int = 3) -> tupl
     for attempt in range(retries):
         try:
             msg = MIMEMultipart("alternative")
-            msg["From"] = settings.EMAIL_FROM or settings.SMTP_USERNAME
+            from_addr = settings.EMAIL_FROM or settings.SMTP_USERNAME
+            from_name = getattr(settings, "SMTP_FROM_NAME", "LifeOS Smart Campus")
+            msg["From"] = f"{from_name} <{from_addr}>" if from_name else from_addr
             msg["To"] = to_email
             msg["Subject"] = subject
             msg.attach(MIMEText(html_body, "html"))

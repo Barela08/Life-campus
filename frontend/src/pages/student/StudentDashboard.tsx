@@ -10,10 +10,15 @@ export default function StudentDashboard() {
   const [loading, setLoading] = useState(true)
 
   const load = async () => {
-    setLoading(true)
     try { setData((await api.get('/student/dashboard')).data) } catch (e) { console.error(e) } finally { setLoading(false) }
   }
   useEffect(() => { load() }, [])
+
+  // Realtime updates — poll every 3s so attendance shows up immediately
+  useEffect(() => {
+    const i = setInterval(() => { load() }, 3000)
+    return () => clearInterval(i)
+  }, [])
 
   if (loading || !data) return <StudentLayout><Loading /></StudentLayout>
 

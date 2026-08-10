@@ -1,6 +1,13 @@
 import os
 from pathlib import Path
 
+# Load .env file if present (python-dotenv)
+try:
+    from dotenv import load_dotenv
+    load_dotenv(Path(__file__).resolve().parent.parent / ".env")
+except ImportError:
+    pass
+
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 
@@ -11,7 +18,13 @@ class Settings:
     ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 8
     REFRESH_TOKEN_EXPIRE_DAYS = 7
 
+    # Database — supports SQLite (dev) or PostgreSQL/Supabase (production)
     DATABASE_URL = os.getenv("DATABASE_URL", f"sqlite:///{BASE_DIR / 'data' / 'lifeos.db'}")
+
+    # Supabase
+    SUPABASE_URL = os.getenv("SUPABASE_URL", "")
+    SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY", "")
+    SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
 
     # Uploads
     UPLOAD_DIR = BASE_DIR / "uploads"
@@ -24,14 +37,15 @@ class Settings:
     FACE_MATCH_THRESHOLD = float(os.getenv("FACE_MATCH_THRESHOLD", "0.52"))
     EMBEDDING_ENCRYPT_KEY = os.getenv("EMBEDDING_ENCRYPT_KEY", "lifeos-embedding-encryption-key")
 
-    # Email config (Gmail SMTP) — matches required env var structure
+    # Email config (Gmail SMTP)
     SMTP_HOST = os.getenv("SMTP_HOST", "smtp.gmail.com")
     SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
     SMTP_USERNAME = os.getenv("SMTP_USERNAME", "")
     SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "")
     SMTP_FROM_EMAIL = os.getenv("SMTP_FROM_EMAIL", "")
+    SMTP_FROM_NAME = os.getenv("SMTP_FROM_NAME", "LifeOS Smart Campus")
     SMTP_USE_TLS = os.getenv("SMTP_USE_TLS", "true").lower() == "true"
-    EMAIL_ENABLED = os.getenv("EMAIL_ENABLED", "false").lower() == "true"
+    EMAIL_ENABLED = os.getenv("EMAIL_ENABLED", "true").lower() == "true"
 
     # Backwards-compatible alias
     @property
