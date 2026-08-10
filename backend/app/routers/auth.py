@@ -88,6 +88,42 @@ def me(user: models.User = Depends(security.get_current_user)):
             "full_name": user.full_name, "role": user.role}
     if user.role == "student" and user.student:
         data["student_id"] = user.student.student_id
+        data["phone"] = user.student.phone
     if user.role == "teacher" and user.teacher:
         data["teacher_id"] = user.teacher.teacher_id
+        data["phone"] = user.teacher.phone
+        data["department_id"] = user.teacher.department_id
     return data
+
+
+@router.patch("/me")
+def update_me(req: schemas.ProfileUpdateRequest,
+              user: models.User = Depends(security.get_current_user),
+              db: Session = Depends(get_db)):
+    """Update the authenticated user's own profile fields."""
+    if req.full_name is not None:
+        user.full_name = req.full_name
+        # Keep teacher/student full_name in sync
+        if user.teacher:
+            user.teacher.full_name = req.full_name
+        if user.student:
+            user.student.full_name = req.full_name
+    if req.email is not None:
+        # Prevent duplicate email
+        other = db.query(models.User).filter(models.User.email == req.email, models.User.id != user.id).first()
+        if other:
+            raise HTTPException(status_code=400, detail="Email already in use")
+        user.email = str(req.email)
+        if user.teacher:
+            user.teacher.email = str(req.email)
+        if user.student:
+            user.student.email = str(req.email)
+    # Phone is stored on teacher/student profile
+    if req.phone is not None:
+        if user.teacher:
+            user.teacher.phone = req.phone
+        if user.student:
+            user.student.phone = req.phone
+    db.commit()
+    db.refresh(user)
+    return {"message": "Profile updated successfully", "full_name": user.full_name, "email": user.email}

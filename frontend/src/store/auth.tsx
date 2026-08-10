@@ -7,6 +7,10 @@ interface User {
   email: string
   full_name: string
   role: string
+  phone?: string
+  teacher_id?: string
+  student_id?: string
+  department_id?: number
   must_change_password?: boolean
 }
 
@@ -16,6 +20,8 @@ interface AuthCtx {
   login: (username: string, password: string) => Promise<User>
   logout: () => void
   changePassword: (oldP: string, newP: string) => Promise<void>
+  updateProfile: (data: Partial<User>) => Promise<User | null>
+  refreshUser: () => Promise<void>
 }
 
 const Ctx = createContext<AuthCtx>({
@@ -24,6 +30,8 @@ const Ctx = createContext<AuthCtx>({
   login: async () => ({ id: 0, username: '', email: '', full_name: '', role: '' }),
   logout: () => {},
   changePassword: async () => {},
+  updateProfile: async () => null,
+  refreshUser: async () => {},
 })
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -70,8 +78,28 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   }
 
+  const updateProfile = async (data: Partial<User>) => {
+    const res = await api.patch('/auth/me', data)
+    const updated = { ...user!, ...data, full_name: res.data.full_name, email: res.data.email }
+    localStorage.setItem('lifeos_user', JSON.stringify(updated))
+    setUser(updated)
+    return updated
+  }
+
+  const refreshUser = async () => {
+    try {
+      const res = await api.get('/auth/me')
+      const current = user || { id: res.data.id, username: res.data.username, role: res.data.role }
+      const updated = { ...current, ...res.data }
+      localStorage.setItem('lifeos_user', JSON.stringify(updated))
+      setUser(updated)
+    } catch {
+      // ignore
+    }
+  }
+
   return (
-    <Ctx.Provider value={{ user, token, login, logout, changePassword }}>
+    <Ctx.Provider value={{ user, token, login, logout, changePassword, updateProfile, refreshUser }}>
       {children}
     </Ctx.Provider>
   )

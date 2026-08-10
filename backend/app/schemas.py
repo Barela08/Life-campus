@@ -24,6 +24,15 @@ class ChangePasswordRequest(BaseModel):
     new_password: str
 
 
+class ProfileUpdateRequest(BaseModel):
+    full_name: Optional[str] = None
+    email: Optional[EmailStr] = None
+    phone: Optional[str] = None
+    bio: Optional[str] = None
+    designation: Optional[str] = None
+    website: Optional[str] = None
+
+
 class ForgotPasswordRequest(BaseModel):
     email: str
 
