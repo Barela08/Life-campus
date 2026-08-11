@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor
 from typing import Iterable, Optional
 
 from sqlalchemy.orm import Session
 
 from . import email_service, models
 from .config import settings
+
+_email_executor = ThreadPoolExecutor(max_workers=3, thread_name_prefix="lifeos-email")
 
 
 def safe_email_error(error: object) -> str:
@@ -140,6 +143,33 @@ def deliver_notification_email(
     return ok, safe_error
 
 
+def _deliver_notification_email_async(
+    notification_id: int,
+    email_subject: str | None,
+    email_html: str | None,
+    body_type: str,
+) -> None:
+    """SMTP is external I/O; use an isolated DB session outside API requests."""
+    from .database import SessionLocal
+    db = SessionLocal()
+    try:
+        notification = db.get(models.Notification, notification_id)
+        if not notification:
+            return
+        deliver_notification_email(
+            db,
+            notification,
+            email_subject=email_subject,
+            email_html=email_html,
+            body_type=body_type,
+        )
+        db.commit()
+    except Exception:
+        db.rollback()
+    finally:
+        db.close()
+
+
 def notify_users(
     db: Session,
     user_ids: Iterable[int],
@@ -185,23 +215,19 @@ def notify_users(
     emails_sent = emails_failed = 0
     if send_email and not email_status_override:
         for notification in notifications:
-            recipient = db.get(models.User, notification.user_id)
-            ok, _ = deliver_notification_email(
-                db,
-                notification,
-                recipient,
-                email_subject=email_subject,
-                email_html=email_html,
-                body_type=body_type,
+            _email_executor.submit(
+                _deliver_notification_email_async,
+                notification.id,
+                email_subject,
+                email_html,
+                body_type,
             )
-            emails_sent += int(ok)
-            emails_failed += int(not ok)
-        db.commit()
 
     return {
         "notification_count": len(notifications),
         "emails_sent": emails_sent,
         "emails_failed": emails_failed,
+        "emails_queued": len(notifications) if send_email and not email_status_override else 0,
         "email_requested": send_email or bool(email_status_override),
         "notifications": notifications,
     }

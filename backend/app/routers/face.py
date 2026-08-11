@@ -1,4 +1,6 @@
 import base64
+import threading
+import time
 from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
@@ -10,6 +12,39 @@ from ..config import settings
 router = APIRouter(prefix="/api/face", tags=["face"])
 
 ALLOWED_ANGLES = {"front", "left", "right", "up", "down", "smile", "normal"}
+_embedding_cache: dict[tuple[int, int, str], tuple[float, list[dict]]] = {}
+_embedding_cache_lock = threading.Lock()
+_EMBEDDING_CACHE_SECONDS = 60
+
+
+def _invalidate_embedding_cache() -> None:
+    with _embedding_cache_lock:
+        _embedding_cache.clear()
+
+
+def _known_embeddings(db: Session, session: models.AttendanceSession) -> list[dict]:
+    """Load and decrypt a class cohort once, not on every camera frame."""
+    key = (session.department_id, session.class_id, session.section or "")
+    now = time.monotonic()
+    with _embedding_cache_lock:
+        cached = _embedding_cache.get(key)
+        if cached and now - cached[0] < _EMBEDDING_CACHE_SECONDS:
+            return cached[1]
+
+    query = db.query(models.FaceEmbedding).join(models.Student).filter(
+        models.Student.department_id == session.department_id,
+        models.Student.class_id == session.class_id,
+        models.Student.face_status == "approved",
+    )
+    if session.section:
+        query = query.filter(models.Student.section == session.section)
+    embeddings = [
+        {"student_id": row.student_id, "embedding": face_service.decrypt_embedding(row.embedding)}
+        for row in query.all()
+    ]
+    with _embedding_cache_lock:
+        _embedding_cache[key] = (now, embeddings)
+    return embeddings
 
 
 def get_config_threshold(db: Session) -> float:
@@ -100,6 +135,7 @@ def register_face(req: schemas.RegisterFaceRequest,
     db.add(fe)
     student.face_status = "pending"
     db.commit()
+    _invalidate_embedding_cache()
     db.refresh(fe)
 
     # Audit log
@@ -156,6 +192,7 @@ def delete_face_angle(student_id: int, angle: str,
     else:
         student.face_status = "pending"
     db.commit()
+    _invalidate_embedding_cache()
     return {"message": f"Angle '{angle}' deleted", "remaining": remaining}
 
 
@@ -172,6 +209,7 @@ def approve_face(student_id: int,
     student.face_status = "approved"
     student.face_registered_at = datetime.utcnow()
     db.commit()
+    _invalidate_embedding_cache()
     return {"message": "Face registration approved"}
 
 
@@ -186,6 +224,7 @@ def reset_face(student_id: int,
     student.face_status = "not_registered"
     student.face_registered_at = None
     db.commit()
+    _invalidate_embedding_cache()
     return {"message": "Face data reset"}
 
 
@@ -207,21 +246,12 @@ def match_face(req: schemas.FaceMatchRequest,
         raise HTTPException(status_code=400, detail="Camera frame is not ready. Please wait.")
 
     # ---- 2. Filter to only students from the selected Department / Class / Section ----
-    known_ids = db.query(models.FaceEmbedding.student_id).join(models.Student).filter(
-        models.Student.department_id == session.department_id,
-        models.Student.class_id == session.class_id,
-    )
-    if session.section:
-        known_ids = known_ids.filter(models.Student.section == session.section)
-    known_ids = [row[0] for row in known_ids.all()]
-    known = db.query(models.FaceEmbedding).filter(models.FaceEmbedding.student_id.in_(known_ids)).all()
-    if not known:
+    known_list = _known_embeddings(db, session)
+    if not known_list:
         db.add(models.AuditLog(user_id=user.id, action="attendance_failure",
                                detail="No registered faces for selected class/section"))
         db.commit()
         return {"matched": False, "reason": "No registered faces for selected class/section", "confidence": 0.0}
-
-    known_list = [{"student_id": k.student_id, "embedding": face_service.decrypt_embedding(k.embedding)} for k in known]
 
     # ---- 3. Liveness / anti-spoof ----
     liveness = face_service.liveness_check(req.image_b64)

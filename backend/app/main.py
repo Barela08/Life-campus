@@ -147,6 +147,9 @@ async def lifespan(app: FastAPI):
     seed_admin()
     from .runtime_config import apply_runtime_smtp_settings
     apply_runtime_smtp_settings(db=SessionLocal())
+    # Warm the singleton face engine once during startup so the first live
+    # attendance frame does not pay model-initialization cost.
+    logger.info("Face engine ready: %s", get_engine())
     yield
 
 
