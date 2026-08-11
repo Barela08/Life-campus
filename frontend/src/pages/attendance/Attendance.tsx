@@ -143,6 +143,18 @@ const videoRef = useRef<HTMLVideoElement>(null)
   }
   useEffect(() => { load() }, [])
 
+  // A configured teacher should not have to select the same cohort every
+  // session.  The backend remains the authority and rejects any altered
+  // department/class/section values.
+  useEffect(() => {
+    if (user?.role !== 'teacher') return
+    api.get('/teacher/profile').then(({ data }) => {
+      if (data.department_id) setDepartmentId(String(data.department_id))
+      if (data.class_id) setClassId(String(data.class_id))
+      if (data.section) setSection(data.section)
+    }).catch(() => {})
+  }, [user?.id, user?.role])
+
   // Load classes when department changes
   useEffect(() => {
     if (!departmentId) { setClasses([]); return }

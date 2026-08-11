@@ -56,6 +56,15 @@ def start_session(req: schemas.StartSessionRequest,
         if subject_id and subject_id != teacher.subject_id:
             raise HTTPException(status_code=403, detail="You may only take attendance for your assigned subject")
         subject_id = teacher.subject_id
+    if user.role == "teacher":
+        if teacher.department_id and req.department_id != teacher.department_id:
+            raise HTTPException(status_code=403, detail="You may only take attendance for your assigned department")
+        if teacher.class_id and req.class_id != teacher.class_id:
+            raise HTTPException(status_code=403, detail="You may only take attendance for your assigned class")
+        if teacher.section:
+            if req.section and req.section != teacher.section:
+                raise HTTPException(status_code=403, detail="You may only take attendance for your assigned section")
+            req.section = teacher.section
     if subject_id:
         subject = db.get(models.Subject, subject_id)
         if not subject or subject.department_id != req.department_id:
@@ -98,6 +107,9 @@ def get_session(session_id: int, user: models.User = Depends(security.require_ro
         raise HTTPException(status_code=404, detail="Session not found")
     if user.role == "teacher" and (not session.teacher or session.teacher.user_id != user.id):
         raise HTTPException(status_code=403, detail="You may only record attendance for your own session")
+    if (student.department_id != session.department_id or student.class_id != session.class_id
+            or (session.section and student.section != session.section)):
+        raise HTTPException(status_code=422, detail="Student does not belong to this attendance session")
     records = db.query(models.AttendanceRecord).filter(models.AttendanceRecord.session_id == session_id).all()
     return {
         "session_id": session.id,
@@ -140,8 +152,20 @@ def manual_attendance(req: schemas.ManualAttendanceRequest,
 
 @router.get("/records")
 def attendance_records(date: date = None, student_id: int = None, class_id: int = None,
-                       subject_id: int = None, db: Session = Depends(get_db)):
+                       subject_id: int = None, user: models.User = Depends(security.require_roles("admin", "teacher", "student")), db: Session = Depends(get_db)):
     q = db.query(models.AttendanceRecord)
+    if user.role == "student":
+        if not user.student:
+            raise HTTPException(status_code=404, detail="Student profile not found")
+        if student_id and student_id != user.student.id:
+            raise HTTPException(status_code=403, detail="You may only view your own attendance")
+        q = q.filter(models.AttendanceRecord.student_id == user.student.id)
+    elif user.role == "teacher":
+        if not user.teacher:
+            raise HTTPException(status_code=404, detail="Teacher profile not found")
+        q = q.filter(models.AttendanceRecord.session_id.in_(
+            db.query(models.AttendanceSession.id).filter(models.AttendanceSession.teacher_id == user.teacher.id)
+        ))
     if date:
         q = q.filter(models.AttendanceRecord.date == date)
     if student_id:
@@ -203,8 +227,13 @@ def update_attendance_record(record_id: int, req: schemas.AttendanceRecordUpdate
 
 
 @router.get("/sessions")
-def list_sessions(db: Session = Depends(get_db)):
-    sessions = db.query(models.AttendanceSession).order_by(models.AttendanceSession.started_at.desc()).limit(50).all()
+def list_sessions(user: models.User = Depends(security.require_roles("admin", "teacher")), db: Session = Depends(get_db)):
+    query = db.query(models.AttendanceSession)
+    if user.role == "teacher":
+        if not user.teacher:
+            raise HTTPException(status_code=404, detail="Teacher profile not found")
+        query = query.filter(models.AttendanceSession.teacher_id == user.teacher.id)
+    sessions = query.order_by(models.AttendanceSession.started_at.desc()).limit(50).all()
     return [{"id": s.id, "teacher": s.teacher.full_name if s.teacher else "",
              "subject": s.subject.name if s.subject else "",
              "class": s.class_.name if s.class_ else "",
@@ -212,7 +241,7 @@ def list_sessions(db: Session = Depends(get_db)):
 
 
 @router.get("/overview")
-def overview(db: Session = Depends(get_db)):
+def overview(_user: models.User = Depends(security.require_roles("admin")), db: Session = Depends(get_db)):
     return attendance_service.get_attendance_overview(db)
 
 

@@ -123,7 +123,8 @@ def student_leave_requests(status: str | None = None, user: models.User = Depend
         raise HTTPException(status_code=403, detail="Teacher department assignment is not configured for student leave requests.")
     rows = db.query(models.LeaveRequest).filter(models.LeaveRequest.applicant_role == "student").order_by(models.LeaveRequest.created_at.desc()).all()
     visible = [row for row in rows if leave_router._can_review(row, user, db) and (not status or row.status == status)]
-    return [{**leave_router._out(row, db), "can_review": True} for row in visible]
+    can_decide = security.has_permission(db, user, "leave.approve") and security.has_permission(db, user, "leave.reject")
+    return [{**leave_router._out(row, db), "can_review": can_decide} for row in visible]
 
 
 @router.get("/reports")

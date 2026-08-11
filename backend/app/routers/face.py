@@ -68,6 +68,8 @@ def register_face(req: schemas.RegisterFaceRequest,
     student = db.query(models.Student).get(req.student_id)
     if not student:
         raise HTTPException(status_code=404, detail="Student not found")
+    if user.role == "student" and student.user_id != user.id:
+        raise HTTPException(status_code=403, detail="You may only register your own face")
 
     # Validate the image
     validation = _validate_registration_image(db, req.image_b64)
@@ -110,10 +112,12 @@ def register_face(req: schemas.RegisterFaceRequest,
 
 
 @router.get("/status/{student_id}")
-def face_status(student_id: int, db: Session = Depends(get_db)):
+def face_status(student_id: int, user: models.User = Depends(security.get_current_user), db: Session = Depends(get_db)):
     student = db.query(models.Student).get(student_id)
     if not student:
         raise HTTPException(status_code=404, detail="Student not found")
+    if user.role == "student" and student.user_id != user.id:
+        raise HTTPException(status_code=403, detail="You may only view your own face registration status")
     embeddings = db.query(models.FaceEmbedding).filter(models.FaceEmbedding.student_id == student_id).all()
     registered_angles = [e.angle for e in embeddings]
     required = ["front", "left", "right", "up", "down", "smile", "normal"]
@@ -193,6 +197,8 @@ def match_face(req: schemas.FaceMatchRequest,
     session = db.query(models.AttendanceSession).get(req.session_id)
     if not session or session.status != "active":
         raise HTTPException(status_code=400, detail="No active attendance session")
+    if user.role not in {"teacher", "admin"}:
+        raise HTTPException(status_code=403, detail="Only the session teacher may process attendance")
     if user.role == "teacher" and (not session.teacher or session.teacher.user_id != user.id):
         raise HTTPException(status_code=403, detail="You may only process attendance for your own session")
 

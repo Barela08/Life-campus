@@ -103,40 +103,6 @@ def _image_to_numpy(
 
 
 # ============================================================
-# IMAGE HELPERS
-# ============================================================
-
-def _b64_to_image(image_b64: str) -> Image.Image:
-    if not image_b64:
-        raise ValueError("Image data is empty.")
-
-    try:
-        encoded = image_b64.split(",", 1)[-1]
-
-        raw = base64.b64decode(
-            encoded,
-            validate=False,
-        )
-
-        return Image.open(
-            BytesIO(raw)
-        ).convert("RGB")
-
-    except Exception as exc:
-        raise ValueError(
-            f"Invalid image data: {exc}"
-        ) from exc
-
-
-def _image_to_numpy(
-    image_b64: str,
-) -> np.ndarray:
-    return np.array(
-        _b64_to_image(image_b64)
-    )
-
-
-# ============================================================
 # FACE DETECTION
 # ============================================================
 
