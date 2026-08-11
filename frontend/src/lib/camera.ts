@@ -365,7 +365,7 @@ class CameraService {
     const scale = Math.min(1, maxWidth / video.videoWidth)
     canvas.width = Math.round(video.videoWidth * scale)
     canvas.height = Math.round(video.videoHeight * scale)
-    canvas.getContext('2d')!.drawImage(video, 0, 0)
+    canvas.getContext('2d')!.drawImage(video, 0, 0, canvas.width, canvas.height)
     return canvas.toDataURL('image/jpeg', 0.82)
   }
 

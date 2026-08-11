@@ -14,13 +14,25 @@ interface User {
   must_change_password?: boolean
 }
 
+export interface ProfileChangeData {
+  full_name?: string
+  email?: string
+  phone?: string
+  roll_number?: string
+  section?: string
+  department_id?: number
+  course_id?: number
+  semester_id?: number
+  class_id?: number
+}
+
 interface AuthCtx {
   user: User | null
   token: string | null
   login: (username: string, password: string) => Promise<User>
   logout: () => void
   changePassword: (oldP: string, newP: string) => Promise<void>
-  updateProfile: (data: Partial<User>) => Promise<User | null>
+  updateProfile: (data: ProfileChangeData) => Promise<unknown>
   refreshUser: () => Promise<void>
 }
 
@@ -80,9 +92,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   }
 
-  const updateProfile = async (data: Partial<User>) => {
+  const updateProfile = async (data: ProfileChangeData) => {
     const res = await api.patch('/auth/me', data)
-    const updated = { ...user!, ...data, full_name: res.data.full_name, email: res.data.email, phone: res.data.phone }
+    // Student and teacher profile edits require admin approval.  Keep the
+    // current local profile until that request has been approved.
+    if (res.data?.request) return res.data
+    const updated = { ...user!, ...data, ...res.data }
     localStorage.setItem('lifeos_user', JSON.stringify(updated))
     setUser(updated)
     return updated

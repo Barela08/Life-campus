@@ -119,12 +119,11 @@ def teacher_students(user: models.User = Depends(security.require_roles("teacher
 @router.get("/student-leave-requests")
 def student_leave_requests(status: str | None = None, user: models.User = Depends(security.require_roles("teacher")), db: Session = Depends(get_db)):
     teacher = db.query(models.Teacher).filter(models.Teacher.user_id == user.id).first()
-    if not teacher or not teacher.department_id or not teacher.class_id:
-        raise HTTPException(status_code=403, detail="Teacher assignment is not configured for student leave requests.")
+    if not teacher or not teacher.department_id:
+        raise HTTPException(status_code=403, detail="Teacher department assignment is not configured for student leave requests.")
     rows = db.query(models.LeaveRequest).filter(models.LeaveRequest.applicant_role == "student").order_by(models.LeaveRequest.created_at.desc()).all()
     visible = [row for row in rows if leave_router._can_review(row, user, db) and (not status or row.status == status)]
-    can_decide = security.has_permission(db, user, "leave.approve") and security.has_permission(db, user, "leave.reject")
-    return [{**leave_router._out(row, db), "can_review": can_decide} for row in visible]
+    return [{**leave_router._out(row, db), "can_review": True} for row in visible]
 
 
 @router.get("/reports")

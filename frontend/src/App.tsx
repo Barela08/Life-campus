@@ -1,6 +1,7 @@
 import React, { useEffect } from 'react'
-import { Routes, Route, Navigate } from 'react-router-dom'
+import { Routes, Route, Navigate, useLocation } from 'react-router-dom'
 import { useAuth } from './store/auth'
+import { useBranding } from './store/branding'
 
 import Login from './pages/Login'
 import ChangePassword from './pages/ChangePassword'
@@ -49,6 +50,7 @@ import TeacherLayout from './components/TeacherLayout'
 import AdminLayout from './components/AdminLayout'
 import ApprovalRequests from './pages/ApprovalRequests'
 import LeavePage from './pages/LeavePage'
+import MaintenanceMode from './components/MaintenanceMode'
 
 function Protected({ role, children }: { role: 'admin' | 'teacher' | 'student'; children: React.ReactNode }) {
   const { user } = useAuth()
@@ -63,6 +65,18 @@ function RootLanding() {
   return <Attendance />
 }
 
+function MaintenanceGuard({ children }: { children: React.ReactNode }) {
+  const { user } = useAuth()
+  const { maintenanceMode } = useBranding()
+  const location = useLocation()
+  const publicPath = location.pathname === '/login' || location.pathname === '/forgot-password'
+
+  // During maintenance, only the login page and an authenticated admin portal
+  // remain available.  This also covers routes that do not use a portal layout.
+  if (maintenanceMode && user?.role !== 'admin' && !publicPath) return <MaintenanceMode />
+  return <>{children}</>
+}
+
 export default function App() {
   const { refreshUser, token } = useAuth()
   useEffect(() => {
@@ -70,7 +84,7 @@ export default function App() {
   }, [token])
 
   return (
-    <Routes>
+    <MaintenanceGuard><Routes>
       <Route path="/login" element={<Login />} />
       <Route path="/change-password" element={<ChangePassword />} />
       <Route path="/forgot-password" element={<ForgotPassword />} />
@@ -121,6 +135,6 @@ export default function App() {
 {/* Default landing page = Attendance module */}
       <Route path="/" element={<RootLanding />} />
       <Route path="*" element={<Navigate to="/" replace />} />
-    </Routes>
+    </Routes></MaintenanceGuard>
   )
 }

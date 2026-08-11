@@ -101,6 +101,41 @@ def _image_to_numpy(
     )
 
 
+
+# ============================================================
+# IMAGE HELPERS
+# ============================================================
+
+def _b64_to_image(image_b64: str) -> Image.Image:
+    if not image_b64:
+        raise ValueError("Image data is empty.")
+
+    try:
+        encoded = image_b64.split(",", 1)[-1]
+
+        raw = base64.b64decode(
+            encoded,
+            validate=False,
+        )
+
+        return Image.open(
+            BytesIO(raw)
+        ).convert("RGB")
+
+    except Exception as exc:
+        raise ValueError(
+            f"Invalid image data: {exc}"
+        ) from exc
+
+
+def _image_to_numpy(
+    image_b64: str,
+) -> np.ndarray:
+    return np.array(
+        _b64_to_image(image_b64)
+    )
+
+
 # ============================================================
 # FACE DETECTION
 # ============================================================
@@ -110,27 +145,30 @@ def _detect_faces(
 ) -> list:
 
     engine = _ensure_engine()
+    import logging
+    logger = logging.getLogger("lifeos.face")
+    logger.info(f"_detect_faces: engine={engine}, image_shape={image.shape}, dtype={image.dtype}")
+
     if engine == "insightface":
 
         if _face_app is None:
+            logger.warning("_detect_faces: _face_app is None")
             return []
 
-        return _face_app.get(np.ascontiguousarray(image[:, :, ::-1]))
+        bgr = np.ascontiguousarray(image[:, :, ::-1])
+        logger.info(f"_detect_faces: converted to BGR, shape={bgr.shape}")
+        faces = _face_app.get(bgr)
+        logger.info(f"_detect_faces: insightface found {len(faces)} faces")
+        return faces
 
     if engine == "face_recognition":
-
         import face_recognition
-
-        return face_recognition.face_locations(
-            image,
-            model="hog",
-        )
+        faces = face_recognition.face_locations(image)
+        logger.info(f"_detect_faces: face_recognition found {len(faces)} faces")
+        return faces
 
     return []
 
-
-# ============================================================
-# EMBEDDING
 # ============================================================
 
 def _to_embedding(

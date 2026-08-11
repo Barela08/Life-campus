@@ -1,6 +1,7 @@
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 import logging
+import re
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -179,15 +180,23 @@ app.include_router(roles.router)
 
 @app.exception_handler(Exception)
 async def unexpected_error_handler(request: Request, exc: Exception):
-    """Log unexpected failures and create one debounced, safe admin alert."""
+    """Log unexpected failures and show admins the actual, safe error reason."""
     logger.exception("Unexpected server error on %s", request.url.path)
+    # The notification is visible only to administrators.  Remove line breaks
+    # and cap the text so it is useful without exposing a full traceback.
+    error_reason = re.sub(r"\s+", " ", str(exc)).strip()
+    if not error_reason:
+        error_reason = exc.__class__.__name__
+    error_reason = error_reason[:500]
+    alert_title = f"Server error: {exc.__class__.__name__}"
+    alert_message = f"{request.method} {request.url.path} failed: {error_reason}"
     if not request.url.path.startswith("/api/notifications"):
         try:
             from .system_alerts import record_system_alert
-            record_system_alert("Unexpected server error", "An unexpected server error occurred. Please check the server logs.")
+            record_system_alert(alert_title, alert_message)
         except Exception:
             logger.exception("Unable to record system alert")
-    return JSONResponse(status_code=500, content={"detail": "A server error occurred. Please try again later."})
+    return JSONResponse(status_code=500, content={"detail": f"{alert_title}: {error_reason}"})
 
 
 @app.get("/api/health")

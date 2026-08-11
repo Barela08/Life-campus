@@ -38,12 +38,19 @@ def apply(req: schemas.LeaveRequestCreate, user: models.User = Depends(security.
                               attachment_url=req.attachment_url or "", status="pending",
                               student_id=user.student.id if user.role == "student" and user.student else None)
     db.add(row); db.flush()
-    # This configuration assigns all leave review to admins.  Teachers only
-    # manage their own leave and never receive other users' private requests.
     if user.role == "student" and user.student:
-        # Only teachers assigned to this exact student cohort see private leave.
-        teachers = db.query(models.Teacher).filter(models.Teacher.department_id == user.student.department_id, models.Teacher.class_id == user.student.class_id).all()
-        recipients = [t.user for t in teachers if t.user and (not t.section or t.section == user.student.section) and security.has_permission(db, t.user, "leave.view")]
+        # Notify every teacher who is assigned to the student's cohort.  Some
+        # existing teacher records are department-level (no class selected), so
+        # treat that as an assignment to all classes in the department.
+        teachers = db.query(models.Teacher).filter(
+            models.Teacher.department_id == user.student.department_id
+        ).all()
+        recipients = [
+            teacher.user for teacher in teachers
+            if teacher.user
+            and (teacher.class_id is None or teacher.class_id == user.student.class_id)
+            and (not teacher.section or teacher.section == user.student.section)
+        ]
     else:
         recipients = db.query(models.User).filter(models.User.role == "admin", models.User.is_active.is_(True)).all()
     db.add(models.AuditLog(user_id=user.id, action="leave_submitted", detail=f"leave_id={row.id}")); db.commit()
@@ -98,11 +105,20 @@ def cancel(leave_id: int, user: models.User = Depends(security.require_roles("st
 def _can_review(row, user, db):
     if row.applicant_id == user.id: return False
     if user.role == "admin": return True
-    if row.applicant_role != "student" or not security.has_permission(db, user, "leave.view"):
+    if row.applicant_role != "student":
         return False
     applicant = _applicant(row, db)
     teacher = user.teacher
-    return bool(applicant and applicant.student and teacher and teacher.department_id == applicant.student.department_id and teacher.class_id == applicant.student.class_id and (not teacher.section or teacher.section == applicant.student.section))
+    if not (applicant and applicant.student and teacher):
+        return False
+    student = applicant.student
+    # A teacher may be configured for an entire department or for one class.
+    # In both cases section (when set) remains a hard privacy boundary.
+    return bool(
+        teacher.department_id == student.department_id
+        and (teacher.class_id is None or teacher.class_id == student.class_id)
+        and (not teacher.section or teacher.section == student.section)
+    )
 
 
 @router.get("/review")
@@ -117,9 +133,6 @@ def review(leave_id: int, req: schemas.LeaveReviewRequest, user: models.User = D
     if not row: raise HTTPException(status_code=404, detail="Leave request not found")
     if row.status != "pending": raise HTTPException(status_code=409, detail="Leave request has already been reviewed.")
     if not _can_review(row, user, db): raise HTTPException(status_code=403, detail="You are not authorized to perform this action.")
-    required_permission = "leave.approve" if req.action == "approve" else "leave.reject"
-    if user.role != "admin" and not security.has_permission(db, user, required_permission):
-        raise HTTPException(status_code=403, detail=f"Permission denied: You do not have {required_permission} permission.")
     if req.action == "reject" and not (req.rejection_reason or "").strip(): raise HTTPException(status_code=422, detail="A rejection reason is required")
     applicant = _applicant(row, db); row.status = "approved" if req.action == "approve" else "rejected"; row.reviewed_by = user.id; row.reviewed_at = datetime.utcnow(); row.rejection_reason = (req.rejection_reason or "").strip()
     db.add(models.AuditLog(user_id=user.id, action=f"leave_{row.status}", detail=f"leave_id={row.id};applicant={applicant.id}")); db.commit()

@@ -40,7 +40,11 @@ export const BrandingProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   }
 
   useEffect(() => {
-    refreshBranding()
+    void refreshBranding()
+    // Other open portals pick up an admin's maintenance-mode change without
+    // requiring a manual refresh.
+    const timer = window.setInterval(() => void refreshBranding(), 5000)
+    return () => window.clearInterval(timer)
   }, [])
 
   return (

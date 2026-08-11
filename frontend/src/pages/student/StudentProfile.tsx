@@ -8,6 +8,7 @@ import { useAuth } from '../../store/auth'
 export default function StudentProfile() {
   const { user, updateProfile, refreshUser } = useAuth()
   const [profile, setProfile] = useState<any>(null)
+  const [options, setOptions] = useState<any>({ departments: [], courses: [], semesters: [], classes: [] })
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [savingProfile, setSavingProfile] = useState(false)
@@ -16,8 +17,8 @@ export default function StudentProfile() {
   const [confirm, setConfirm] = useState('')
 
   useEffect(() => {
-    api.get('/student/profile')
-      .then(res => setProfile(res.data))
+    Promise.all([api.get('/student/profile'), api.get('/approvals/profile/options')])
+      .then(([profileRes, optionsRes]) => { setProfile(profileRes.data); setOptions(optionsRes.data) })
       .catch(err => setError(apiErrorMessage(err, 'Failed to load profile')))
       .finally(() => setLoading(false))
   }, [])
@@ -30,6 +31,12 @@ export default function StudentProfile() {
         full_name: profile.full_name,
         email: profile.email,
         phone: profile.phone,
+        roll_number: profile.roll_number,
+        department_id: Number(profile.department_id),
+        course_id: Number(profile.course_id),
+        semester_id: Number(profile.semester_id),
+        class_id: Number(profile.class_id),
+        section: profile.section,
       })
       await refreshUser() // Refresh user from token
       const res = await api.get('/student/profile') // Re-fetch student-specific profile data
@@ -83,9 +90,18 @@ export default function StudentProfile() {
 
             <form onSubmit={saveProfile} className="space-y-4 pt-4 border-t border-gray-200 dark:border-gray-700">
               <p className="text-sm font-semibold">Edit Profile</p>
-              <div><label className="label">Full Name</label><input className="input" required value={profile.full_name || ''} onChange={e => setProfile({ ...profile, full_name: e.target.value })} /></div>
-              <div><label className="label">Email</label><input className="input" type="email" required value={profile.email || ''} onChange={e => setProfile({ ...profile, email: e.target.value })} /></div>
-              <div><label className="label">Phone</label><input className="input" value={profile.phone || ''} onChange={e => setProfile({ ...profile, phone: e.target.value })} /></div>
+              <p className="text-xs text-gray-500 -mt-2">All changes are sent to the admin for approval. Attendance and Student ID cannot be edited.</p>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div><label className="label">Full Name</label><input className="input" required value={profile.full_name || ''} onChange={e => setProfile({ ...profile, full_name: e.target.value })} /></div>
+                <div><label className="label">Roll No.</label><input className="input" required value={profile.roll_number || ''} onChange={e => setProfile({ ...profile, roll_number: e.target.value })} /></div>
+                <div><label className="label">Email</label><input className="input" type="email" required value={profile.email || ''} onChange={e => setProfile({ ...profile, email: e.target.value })} /></div>
+                <div><label className="label">Phone</label><input className="input" value={profile.phone || ''} onChange={e => setProfile({ ...profile, phone: e.target.value })} /></div>
+                <div><label className="label">Department</label><select className="input" required value={profile.department_id || ''} onChange={e => setProfile({ ...profile, department_id: +e.target.value, course_id: '', class_id: '' })}><option value="">Select department</option>{options.departments.map((item: any) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></div>
+                <div><label className="label">Course</label><select className="input" required value={profile.course_id || ''} onChange={e => setProfile({ ...profile, course_id: +e.target.value, class_id: '' })}><option value="">Select course</option>{options.courses.filter((item: any) => item.department_id === +profile.department_id).map((item: any) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></div>
+                <div><label className="label">Semester</label><select className="input" required value={profile.semester_id || ''} onChange={e => setProfile({ ...profile, semester_id: +e.target.value, class_id: '' })}><option value="">Select semester</option>{options.semesters.map((item: any) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></div>
+                <div><label className="label">Class</label><select className="input" required value={profile.class_id || ''} onChange={e => setProfile({ ...profile, class_id: +e.target.value })}><option value="">Select class</option>{options.classes.filter((item: any) => item.course_id === +profile.course_id && item.semester_id === +profile.semester_id).map((item: any) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></div>
+                <div><label className="label">Section</label><input className="input" required value={profile.section || ''} onChange={e => setProfile({ ...profile, section: e.target.value })} /></div>
+              </div>
               <button type="submit" disabled={savingProfile} className="btn-primary flex items-center gap-2">
                 {savingProfile ? <Loader size={16} className="animate-spin" /> : <Save size={16} />}
                 {savingProfile ? 'Saving...' : 'Save Changes'}
