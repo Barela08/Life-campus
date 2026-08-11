@@ -1,6 +1,5 @@
 import React, { useEffect, useState } from 'react'
 import api, { apiErrorMessage } from '../../lib/api'
-import StudentLayout from '../../components/StudentLayout'
 import { PageHeader, Badge, Loading, Empty } from '../../components/ui'
 import toast from 'react-hot-toast'
 import { PieChart, TrendingUp, CalendarDays } from 'lucide-react'
@@ -31,7 +30,7 @@ export default function StudentReport() {
   const years = Array.from({ length: 5 }, (_, i) => currentYear - i)
 
   return (
-    <StudentLayout>
+    <>
       <PageHeader title="Monthly Attendance Report" subtitle="Track your attendance month by month" />
       <div className="flex flex-wrap gap-3 mb-6">
         <select className="input" value={month} onChange={e => setMonth(+e.target.value)}>
@@ -80,6 +79,6 @@ export default function StudentReport() {
           </div>
         </>
       )}
-    </StudentLayout>
+    </>
   )
 }

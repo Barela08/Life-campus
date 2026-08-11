@@ -107,6 +107,12 @@ def student_profile(user: models.User = Depends(security.require_roles("student"
     return {
         "id": student.id, "student_id": student.student_id, "full_name": student.full_name,
         "roll_number": student.roll_number, "email": student.email, "phone": student.phone,
+        "parent_email": student.parent_email,
+        "section": student.section,
+        "department_id": student.department_id,
+        "course_id": student.course_id,
+        "semester_id": student.semester_id,
+        "class_id": student.class_id,
         "department": student.department.name if student.department else "",
         "course": student.course.name if student.course else "",
         "semester": student.semester.name if student.semester else "",

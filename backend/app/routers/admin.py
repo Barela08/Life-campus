@@ -1,10 +1,14 @@
+import json
 import os
+import secrets
+import string
 from datetime import date, datetime
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from ..database import get_db
-from .. import models, schemas, security, email_service
+from .. import models, schemas, security, email_service, notification_service
+from ..runtime_config import SMTP_KEYS, encrypt
 from ..config import settings
 from ..attendance_service import get_attendance_overview, compute_student_percentage
 
@@ -26,6 +30,133 @@ def _update_fields(obj, data: dict):
         if value == "":
             value = None if field.endswith("_email") else value
         setattr(obj, field, value)
+
+
+def _temporary_password(length: int = 14) -> str:
+    alphabet = string.ascii_letters + string.digits + "!@#$%?"
+    required = [
+        secrets.choice(string.ascii_lowercase),
+        secrets.choice(string.ascii_uppercase),
+        secrets.choice(string.digits),
+        secrets.choice("!@#$%?"),
+    ]
+    required.extend(secrets.choice(alphabet) for _ in range(max(0, length - len(required))))
+    secrets.SystemRandom().shuffle(required)
+    return "".join(required)
+
+
+def _safe_email_status(ok: bool, error: str = "") -> dict:
+    return {"success": ok, "status": "sent" if ok else "failed", "error": error or ""}
+
+
+def _name(db: Session, model, row_id):
+    if not row_id:
+        return "-"
+    row = db.get(model, row_id)
+    return row.name if row else "-"
+
+
+def _optional_int(value):
+    if value in (None, ""):
+        return None
+    return int(value)
+
+
+def _student_payload(s: models.Student) -> dict:
+    return {
+        "id": s.id,
+        "user_id": s.user_id,
+        "student_id": s.student_id,
+        "full_name": s.full_name,
+        "roll_number": s.roll_number,
+        "section": s.section or "",
+        "department_id": s.department_id,
+        "course_id": s.course_id,
+        "semester_id": s.semester_id,
+        "class_id": s.class_id,
+        "email": s.email,
+        "phone": s.phone or "",
+        "parent_email": s.parent_email,
+        "profile_photo": s.profile_photo or "",
+        "face_status": s.face_status,
+        "created_at": s.created_at,
+    }
+
+
+def _teacher_payload(t: models.Teacher) -> dict:
+    return {
+        "id": t.id,
+        "user_id": t.user_id,
+        "teacher_id": t.teacher_id,
+        "full_name": t.full_name,
+        "email": t.email,
+        "phone": t.phone or "",
+        "department_id": t.department_id,
+        "subject_id": t.subject_id,
+        "class_id": t.class_id,
+        "section": t.section or "",
+        "created_at": t.created_at,
+    }
+
+
+def _audit(db: Session, actor_id: int, action: str, **metadata):
+    db.add(models.AuditLog(user_id=actor_id, action=action, detail=json.dumps(metadata, default=str, separators=(",", ":"))))
+
+
+def _send_student_welcome(db: Session, student: models.Student, temp_password: str, admin: models.User) -> dict:
+    rows = {
+        "Name": student.full_name,
+        "Student ID": student.student_id,
+        "Roll Number": student.roll_number,
+        "Department": _name(db, models.Department, student.department_id),
+        "Class": _name(db, models.Class, student.class_id),
+        "Semester": _name(db, models.Semester, student.semester_id),
+        "Section": student.section or "-",
+    }
+    ok, error = email_service.send_welcome_student_email(db, student.email, student.full_name, temp_password, rows)
+    status = _safe_email_status(ok, error)
+    _audit(db, admin.id, "welcome_email_sent" if ok else "welcome_email_failed", target_id=student.user_id, role="student", email=student.email, error=error)
+    db.commit()
+    notification_service.notify_user(
+        db,
+        student.user_id,
+        title="Student account created",
+        message="Your LifeOS Smart Campus student account has been created. Please check your email for login details.",
+        notification_type="success" if ok else "warning",
+        priority="important",
+        sender=admin,
+        send_email=False,
+        email_status_override=status["status"],
+        email_error_override=status["error"],
+        body_type="welcome_student",
+    )
+    return status
+
+
+def _send_staff_welcome(db: Session, user: models.User, temp_password: str, admin: models.User, rows: dict) -> dict:
+    ok, error = email_service.send_welcome_staff_email(db, user.email, user.full_name, temp_password, rows)
+    status = _safe_email_status(ok, error)
+    _audit(db, admin.id, "welcome_email_sent" if ok else "welcome_email_failed", target_id=user.id, role=user.role, email=user.email, error=error)
+    db.commit()
+    notification_service.notify_user(
+        db,
+        user.id,
+        title="Staff account created" if user.role == "staff" else "Teacher account created",
+        message="Your LifeOS Smart Campus account has been created. Please check your email for login details.",
+        notification_type="success" if ok else "warning",
+        priority="important",
+        sender=admin,
+        send_email=False,
+        email_status_override=status["status"],
+        email_error_override=status["error"],
+        body_type="welcome_staff",
+    )
+    return status
+
+@router.get("/leave-requests")
+def admin_leave_requests(db: Session = Depends(get_db), _=admin_only):
+    from .leave import _out
+    return [_out(row, db) for row in db.query(models.LeaveRequest).order_by(models.LeaveRequest.created_at.desc()).all()]
 
 
 # ---------- Dashboard ----------
@@ -226,15 +357,17 @@ def update_subject(subject_id: int, req: schemas.SubjectUpdate, db: Session = De
 
 
 # ---------- Students ----------
-@router.post("/students", response_model=schemas.StudentOut)
-def create_student(req: schemas.StudentCreate, db: Session = Depends(get_db), _=admin_only):
+@router.post("/students")
+def create_student(req: schemas.StudentCreate, db: Session = Depends(get_db), admin: models.User = Depends(security.require_roles("admin"))):
     if db.query(models.Student).filter(models.Student.student_id == req.student_id).first():
         raise HTTPException(status_code=400, detail="Student ID already exists")
-    if db.query(models.Student).filter(models.Student.email == req.email).first():
+    email = str(req.email).strip().lower()
+    if db.query(models.Student).filter(models.Student.email == email).first() or db.query(models.User).filter((models.User.email == email) | (models.User.username == req.student_id)).first():
         raise HTTPException(status_code=400, detail="Email already registered")
+    temp_password = _temporary_password()
     user = models.User(
-        username=req.student_id, email=str(req.email), full_name=req.full_name,
-        hashed_password=security.hash_password(req.password), role="student",
+        username=req.student_id, email=email, full_name=req.full_name,
+        phone=req.phone, hashed_password=security.hash_password(temp_password), role="student",
         must_change_password=True,
     )
     db.add(user); db.flush()
@@ -242,11 +375,23 @@ def create_student(req: schemas.StudentCreate, db: Session = Depends(get_db), _=
         user_id=user.id, student_id=req.student_id, full_name=req.full_name,
         roll_number=req.roll_number, section=req.section, department_id=req.department_id,
         course_id=req.course_id,
-        semester_id=req.semester_id, class_id=req.class_id, email=str(req.email),
+        semester_id=req.semester_id, class_id=req.class_id, email=email,
         phone=req.phone, parent_email=str(req.parent_email) if req.parent_email else None,
     )
-    db.add(student); db.commit(); db.refresh(student)
-    return student
+    db.add(student)
+    _audit(db, admin.id, "student_created", target_id=user.id, student_id=req.student_id, email=email)
+    db.commit(); db.refresh(student)
+    welcome = _send_student_welcome(db, student, temp_password, admin)
+    notification_service.notify_admins(
+        db,
+        title="New student created",
+        message=f"{student.full_name} ({student.student_id}) was created by {admin.full_name}. Welcome email: {welcome['status']}.",
+        notification_type="success" if welcome["success"] else "warning",
+        priority="normal",
+        sender=admin,
+        send_email=False,
+    )
+    return {**_student_payload(student), "welcome_email": welcome}
 
 
 @router.get("/students", response_model=list[schemas.StudentOut])
@@ -304,6 +449,19 @@ def delete_student(student_id: int, db: Session = Depends(get_db), _=admin_only)
     return {"message": "Student deleted"}
 
 
+@router.post("/students/{student_id}/welcome-email/retry")
+def retry_student_welcome(student_id: int, admin: models.User = Depends(security.require_roles("admin")), db: Session = Depends(get_db)):
+    student = db.query(models.Student).get(student_id)
+    if not student or not student.user:
+        raise HTTPException(status_code=404, detail="Student not found")
+    temp_password = _temporary_password()
+    student.user.hashed_password = security.hash_password(temp_password)
+    student.user.must_change_password = True
+    db.commit()
+    welcome = _send_student_welcome(db, student, temp_password, admin)
+    return {"message": "Welcome email retry completed.", "welcome_email": welcome}
+
+
 @router.post("/students/{student_id}/photo")
 def upload_student_photo(student_id: int, file: UploadFile = File(...), db: Session = Depends(get_db), _=admin_only):
     s = db.query(models.Student).get(student_id)
@@ -319,20 +477,45 @@ def upload_student_photo(student_id: int, file: UploadFile = File(...), db: Sess
 
 
 # ---------- Teachers ----------
-@router.post("/teachers", response_model=schemas.TeacherOut)
-def create_teacher(req: schemas.TeacherCreate, db: Session = Depends(get_db), _=admin_only):
+@router.post("/teachers")
+def create_teacher(req: schemas.TeacherCreate, db: Session = Depends(get_db), admin: models.User = Depends(security.require_roles("admin"))):
     if db.query(models.Teacher).filter(models.Teacher.teacher_id == req.teacher_id).first():
         raise HTTPException(status_code=400, detail="Teacher ID already exists")
+    email = str(req.email).strip().lower()
+    if db.query(models.User).filter((models.User.email == email) | (models.User.username == req.teacher_id)).first() or db.query(models.Teacher).filter(models.Teacher.email == email).first():
+        raise HTTPException(status_code=409, detail="Email already registered")
+    temp_password = _temporary_password()
     user = models.User(
-        username=req.teacher_id, email=str(req.email), full_name=req.full_name,
-        hashed_password=security.hash_password(req.password), role="teacher",
-        must_change_password=False,
+        username=req.teacher_id, email=email, full_name=req.full_name, phone=req.phone,
+        hashed_password=security.hash_password(temp_password), role="teacher",
+        must_change_password=True,
     )
     db.add(user); db.flush()
     t = models.Teacher(user_id=user.id, teacher_id=req.teacher_id, full_name=req.full_name,
-                       email=str(req.email), phone=req.phone, department_id=req.department_id)
-    db.add(t); db.commit(); db.refresh(t)
-    return t
+                       email=email, phone=req.phone, department_id=req.department_id, subject_id=req.subject_id, class_id=req.class_id, section=req.section)
+    db.add(t)
+    _audit(db, admin.id, "teacher_created", target_id=user.id, teacher_id=req.teacher_id, email=email)
+    db.commit(); db.refresh(t)
+    rows = {
+        "Name": t.full_name,
+        "Role": "Teacher",
+        "Teacher ID": t.teacher_id,
+        "Department": _name(db, models.Department, t.department_id),
+        "Subject": _name(db, models.Subject, t.subject_id),
+        "Class": _name(db, models.Class, t.class_id),
+        "Section": t.section or "-",
+    }
+    welcome = _send_staff_welcome(db, user, temp_password, admin, rows)
+    notification_service.notify_admins(
+        db,
+        title="New teacher created",
+        message=f"{t.full_name} ({t.teacher_id}) was created by {admin.full_name}. Welcome email: {welcome['status']}.",
+        notification_type="success" if welcome["success"] else "warning",
+        priority="normal",
+        sender=admin,
+        send_email=False,
+    )
+    return {**_teacher_payload(t), "welcome_email": welcome}
 
 
 @router.get("/teachers", response_model=list[schemas.TeacherOut])
@@ -388,6 +571,96 @@ def delete_teacher(teacher_id: int, db: Session = Depends(get_db), _=admin_only)
         db.delete(u); _commit_or_400(db, "Teacher user delete failed")
     return {"message": "Teacher deleted"}
 
+
+@router.post("/teachers/{teacher_id}/welcome-email/retry")
+def retry_teacher_welcome(teacher_id: int, admin: models.User = Depends(security.require_roles("admin")), db: Session = Depends(get_db)):
+    teacher = db.query(models.Teacher).get(teacher_id)
+    if not teacher or not teacher.user:
+        raise HTTPException(status_code=404, detail="Teacher not found")
+    temp_password = _temporary_password()
+    teacher.user.hashed_password = security.hash_password(temp_password)
+    teacher.user.must_change_password = True
+    db.commit()
+    rows = {
+        "Name": teacher.full_name,
+        "Role": "Teacher",
+        "Teacher ID": teacher.teacher_id,
+        "Department": _name(db, models.Department, teacher.department_id),
+        "Subject": _name(db, models.Subject, teacher.subject_id),
+        "Class": _name(db, models.Class, teacher.class_id),
+        "Section": teacher.section or "-",
+    }
+    welcome = _send_staff_welcome(db, teacher.user, temp_password, admin, rows)
+    return {"message": "Welcome email retry completed.", "welcome_email": welcome}
+
+
+# ---------- Staff ----------
+@router.get("/staff")
+def list_staff(db: Session = Depends(get_db), _=admin_only):
+    rows = db.query(models.StaffProfile).all()
+    result = []
+    for s in rows:
+        user = db.get(models.User, s.user_id)
+        result.append({"id": s.id, "user_id": s.user_id, "full_name": user.full_name, "email": user.email, "phone": user.phone, "department_id": s.department_id, "subject_id": s.subject_id, "class_id": s.class_id, "section": s.section, "status": s.status, "role_ids": [x.role_id for x in db.query(models.UserRole).filter_by(user_id=s.user_id)]})
+    return result
+
+@router.post("/staff")
+def create_staff(payload: dict, admin: models.User = Depends(security.require_roles("admin")), db: Session = Depends(get_db)):
+    name, email = str(payload.get("full_name", "")).strip(), str(payload.get("email", "")).strip().lower()
+    role_ids = list(set(payload.get("role_ids", [])))
+    if not name or not email: raise HTTPException(422, "Full name and email are required")
+    if db.query(models.User).filter((models.User.email == email) | (models.User.username == email)).first(): raise HTTPException(409, "Email already registered")
+    valid = {r.id for r in db.query(models.Role).filter(models.Role.id.in_(role_ids)).all()}
+    if len(valid) != len(role_ids): raise HTTPException(422, "Invalid role selection")
+    temp_password = _temporary_password()
+    user = models.User(username=email, email=email, full_name=name, phone=str(payload.get("phone", "")), hashed_password=security.hash_password(temp_password), role="staff", is_active=payload.get("status", "active") == "active", must_change_password=True)
+    db.add(user); db.flush(); profile = models.StaffProfile(user_id=user.id, department_id=_optional_int(payload.get("department_id")), subject_id=_optional_int(payload.get("subject_id")), class_id=_optional_int(payload.get("class_id")), section=str(payload.get("section", "")).strip(), status=payload.get("status", "active")); db.add(profile); db.add_all([models.UserRole(user_id=user.id, role_id=i) for i in valid]); _audit(db, admin.id, "staff_created", target_id=user.id, email=email, role_ids=list(valid)); db.commit(); db.refresh(profile)
+    role_names = [r.name for r in db.query(models.Role).filter(models.Role.id.in_(valid)).all()]
+    rows = {
+        "Name": user.full_name,
+        "Role": ", ".join(role_names) if role_names else "Staff",
+        "Department": _name(db, models.Department, profile.department_id),
+        "Subject": _name(db, models.Subject, profile.subject_id),
+        "Class": _name(db, models.Class, profile.class_id),
+        "Section": profile.section or "-",
+    }
+    welcome = _send_staff_welcome(db, user, temp_password, admin, rows)
+    notification_service.notify_admins(
+        db,
+        title="New staff member created",
+        message=f"{user.full_name} was created by {admin.full_name}. Welcome email: {welcome['status']}.",
+        notification_type="success" if welcome["success"] else "warning",
+        priority="normal",
+        sender=admin,
+        send_email=False,
+    )
+    return {"id": profile.id, "user_id": user.id, "full_name": user.full_name, "email": user.email, "welcome_email": welcome}
+
+
+@router.post("/staff/{staff_id}/welcome-email/retry")
+def retry_staff_welcome(staff_id: int, admin: models.User = Depends(security.require_roles("admin")), db: Session = Depends(get_db)):
+    profile = db.query(models.StaffProfile).get(staff_id)
+    if not profile:
+        raise HTTPException(status_code=404, detail="Staff profile not found")
+    user = db.get(models.User, profile.user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="Staff account not found")
+    temp_password = _temporary_password()
+    user.hashed_password = security.hash_password(temp_password)
+    user.must_change_password = True
+    db.commit()
+    role_ids = [row.role_id for row in db.query(models.UserRole).filter_by(user_id=user.id).all()]
+    role_names = [r.name for r in db.query(models.Role).filter(models.Role.id.in_(role_ids)).all()]
+    rows = {
+        "Name": user.full_name,
+        "Role": ", ".join(role_names) if role_names else "Staff",
+        "Department": _name(db, models.Department, profile.department_id),
+        "Subject": _name(db, models.Subject, profile.subject_id),
+        "Class": _name(db, models.Class, profile.class_id),
+        "Section": profile.section or "-",
+    }
+    welcome = _send_staff_welcome(db, user, temp_password, admin, rows)
+    return {"message": "Welcome email retry completed.", "welcome_email": welcome}
 
 # ---------- Analytics ----------
 @router.get("/analytics")
@@ -527,6 +800,54 @@ def upload_system_logo(file: UploadFile = File(...), db: Session = Depends(get_d
 
 
 # ---------- Email Test ----------
+@router.get("/settings/email")
+@router.get("/email/settings")
+def get_email_settings(db: Session = Depends(get_db), _=admin_only):
+    """Return only non-sensitive SMTP configuration to an authenticated admin."""
+    return {
+        "smtp_host": settings.SMTP_HOST,
+        "smtp_port": settings.SMTP_PORT,
+        "smtp_username": settings.SMTP_USERNAME,
+        "smtp_from_email": settings.SMTP_FROM_EMAIL,
+        "smtp_from_name": settings.SMTP_FROM_NAME,
+        "smtp_use_tls": settings.SMTP_USE_TLS,
+        "email_enabled": settings.EMAIL_ENABLED,
+        "smtp_password_configured": bool(settings.SMTP_PASSWORD),
+    }
+
+
+@router.put("/settings/email")
+@router.put("/email/settings")
+def update_email_settings(payload: dict, db: Session = Depends(get_db), admin: models.User = Depends(security.require_roles("admin"))):
+    """Apply SMTP settings in the backend process without ever returning a password."""
+    for key, attr in SMTP_KEYS.items():
+        if key not in payload or payload[key] is None:
+            continue
+        if key == "smtp_password" and not str(payload[key]).strip():
+            continue
+        if key == "smtp_port":
+            try:
+                value = int(payload[key])
+            except (TypeError, ValueError):
+                raise HTTPException(status_code=422, detail="SMTP port must be a number")
+            if not 1 <= value <= 65535:
+                raise HTTPException(status_code=422, detail="SMTP port is out of range")
+        elif key in {"smtp_use_tls", "email_enabled"}:
+            value = bool(payload[key])
+        else:
+            value = str(payload[key]).strip()
+        setattr(settings, attr, value)
+        row = db.query(models.SystemConfig).filter(models.SystemConfig.key == key).first()
+        stored_value = encrypt(value) if key == "smtp_password" else str(value).lower() if isinstance(value, bool) else str(value)
+        if row:
+            row.value, row.is_secret, row.updated_by = stored_value, key == "smtp_password", admin.id
+        else:
+            db.add(models.SystemConfig(key=key, value=stored_value, description="Runtime SMTP setting", is_secret=key == "smtp_password", updated_by=admin.id))
+    db.commit()
+    return get_email_settings(db, admin)
+
+
+@router.post("/settings/email/test")
 @router.post("/email/test")
 def test_email(req: schemas.TestEmailRequest,
                db: Session = Depends(get_db), _=admin_only):
@@ -535,7 +856,9 @@ def test_email(req: schemas.TestEmailRequest,
     # 1. Test SMTP connection
     ok, msg = email_service.test_smtp_connection()
     if not ok:
-        return {"success": False, "connection": False, "message": msg}
+        from ..system_alerts import record_system_alert
+        record_system_alert("Email service unavailable", "Email service is currently unavailable. Please verify SMTP settings.")
+        return {"success": False, "connection": False, "message": "Test email failed. Please verify SMTP settings."}
 
     # 2. Send test email if recipient provided
     if req.to_email:
@@ -553,12 +876,12 @@ def test_email(req: schemas.TestEmailRequest,
           </div>
         </div>
         """.replace("{time}", str(datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
-        send_ok, send_err = email_service._send(str(req.to_email), subject, html)
+        send_ok, send_err = email_service.send_email(str(req.to_email), subject, html)
         email_service.log_email(db, str(req.to_email), subject, "test_email",
                                 "sent" if send_ok else "failed", send_err)
         if not send_ok:
-            return {"success": False, "connection": True, "message": f"SMTP connected but test email failed: {send_err}"}
-        return {"success": True, "connection": True, "message": "SMTP connection successful and test email sent"}
+            return {"success": False, "connection": True, "message": "Test email failed. Please verify SMTP settings."}
+        return {"success": True, "connection": True, "message": "Test email sent successfully."}
 
     return {"success": True, "connection": True, "message": "SMTP connection successful"}
 
@@ -596,7 +919,7 @@ def retry_email(log_id: int, db: Session = Depends(get_db), _=admin_only):
     log = db.query(models.EmailDeliveryFailureLog).get(log_id)
     if not log:
         raise HTTPException(status_code=404, detail="Email failure log not found")
-    ok, err = email_service._send(log.to_email, log.subject, f"<p>Retry of: {log.subject}</p><p>Original error: {log.error}</p>")
+    ok, err = email_service.send_email(log.to_email, log.subject, f"<p>Retry of: {log.subject}</p><p>Original error: {log.error}</p>")
     if ok:
         log.retried = True
         db.commit()

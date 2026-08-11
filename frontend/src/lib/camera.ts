@@ -355,17 +355,18 @@ class CameraService {
   }
 
   /** Capture the current video frame as a JPEG data URL. Returns null if not ready. */
-  captureFrame(): string | null {
+  captureFrame(maxWidth = 640): string | null {
     if (!this.videoRef) return null
     const video = this.videoRef
     if (!video.videoWidth || !video.videoHeight || video.readyState < 2) {
       return null
     }
     const canvas = document.createElement('canvas')
-    canvas.width = video.videoWidth
-    canvas.height = video.videoHeight
+    const scale = Math.min(1, maxWidth / video.videoWidth)
+    canvas.width = Math.round(video.videoWidth * scale)
+    canvas.height = Math.round(video.videoHeight * scale)
     canvas.getContext('2d')!.drawImage(video, 0, 0)
-    return canvas.toDataURL('image/jpeg', 0.85)
+    return canvas.toDataURL('image/jpeg', 0.82)
   }
 
   /** Check if the video frame is ready for capture. */

@@ -193,6 +193,8 @@ def match_face(req: schemas.FaceMatchRequest,
     session = db.query(models.AttendanceSession).get(req.session_id)
     if not session or session.status != "active":
         raise HTTPException(status_code=400, detail="No active attendance session")
+    if user.role == "teacher" and (not session.teacher or session.teacher.user_id != user.id):
+        raise HTTPException(status_code=403, detail="You may only process attendance for your own session")
 
     # ---- 1. Validate frame is ready ----
     if not req.image_b64 or len(req.image_b64) < 100:
@@ -247,7 +249,8 @@ def match_face(req: schemas.FaceMatchRequest,
     subj_name = session.subject.name if session.subject else ""
     tchr_name = session.teacher.full_name if session.teacher else ""
 
-    _, score, best = face_service.match_face(req.image_b64, known_list)
+    # Reuse the embedding extracted above instead of detecting the frame again.
+    _, score, best = face_service.match_embedding(emb, n, known_list)
     if not best:
         snapshot = face_service.save_snapshot(req.image_b64, "unknowns")
         db.add(models.UnknownFaceLog(

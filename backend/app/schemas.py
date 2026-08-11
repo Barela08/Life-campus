@@ -28,9 +28,40 @@ class ProfileUpdateRequest(BaseModel):
     full_name: Optional[str] = None
     email: Optional[EmailStr] = None
     phone: Optional[str] = None
-    bio: Optional[str] = None
-    designation: Optional[str] = None
-    website: Optional[str] = None
+    parent_email: Optional[EmailStr] = None
+    profile_photo: Optional[str] = None
+    roll_number: Optional[str] = None
+    section: Optional[str] = None
+    department_id: Optional[int] = None
+    course_id: Optional[int] = None
+    semester_id: Optional[int] = None
+    class_id: Optional[int] = None
+    subject_id: Optional[int] = None
+    reason: Optional[str] = Field(default=None, max_length=2000)
+
+
+class ApprovalRequestCreate(BaseModel):
+    requested_changes: dict = Field(min_length=1)
+    request_type: str = Field(default="profile_change", max_length=64)
+    reason: Optional[str] = Field(default="", max_length=2000)
+
+
+class ApprovalReviewRequest(BaseModel):
+    action: str = Field(pattern="^(approve|reject)$")
+    rejection_reason: Optional[str] = Field(default=None, max_length=2000)
+
+
+class LeaveRequestCreate(BaseModel):
+    leave_type: str = Field(min_length=1, max_length=80)
+    from_date: date
+    to_date: date
+    reason: str = Field(min_length=1, max_length=2000)
+    attachment_url: Optional[str] = Field(default=None, max_length=1000)
+
+
+class LeaveReviewRequest(BaseModel):
+    action: str = Field(pattern="^(approve|reject)$")
+    rejection_reason: Optional[str] = Field(default=None, max_length=2000)
 
 
 class ForgotPasswordRequest(BaseModel):
@@ -40,6 +71,15 @@ class ForgotPasswordRequest(BaseModel):
 class ResetPasswordRequest(BaseModel):
     token: str
     new_password: str
+
+class VerifyResetOtpRequest(BaseModel):
+    email: EmailStr
+    otp: str = Field(pattern=r"^\d{6}$")
+
+class OtpResetPasswordRequest(BaseModel):
+    reset_token: str
+    new_password: str = Field(min_length=8)
+    confirm_password: str = Field(min_length=8)
 
 
 # Generic
@@ -233,6 +273,9 @@ class TeacherCreate(BaseModel):
     email: EmailStr
     phone: str = ""
     department_id: int
+    subject_id: Optional[int] = None
+    class_id: Optional[int] = None
+    section: str = ""
     password: str = "1234"
 
 
@@ -242,6 +285,9 @@ class TeacherUpdate(BaseModel):
     email: Optional[EmailStr] = None
     phone: Optional[str] = None
     department_id: Optional[int] = None
+    subject_id: Optional[int] = None
+    class_id: Optional[int] = None
+    section: Optional[str] = None
     password: Optional[str] = None
 
 
@@ -253,6 +299,9 @@ class TeacherOut(BaseModel):
     email: str
     phone: str
     department_id: int
+    subject_id: Optional[int] = None
+    class_id: Optional[int] = None
+    section: str = ""
     created_at: datetime
 
     class Config:
@@ -265,6 +314,7 @@ class StartSessionRequest(BaseModel):
     class_id: int
     section: str = ""
     camera_id: str = "default"
+    subject_id: Optional[int] = None
 
 
 class MarkAttendanceRequest(BaseModel):
@@ -309,11 +359,31 @@ class NotificationOut(BaseModel):
     title: str
     message: str
     type: str
+    priority: str = "normal"
     is_read: bool
+    sender_name: str = ""
+    sender_role: str = "system"
+    email_status: str = "not_requested"
     created_at: datetime
 
     class Config:
         from_attributes = True
+
+
+class NotificationSendRequest(BaseModel):
+    title: str = Field(min_length=1, max_length=160)
+    message: str = Field(min_length=1, max_length=4000)
+    type: str = Field(default="general", max_length=32)
+    priority: str = Field(default="normal", max_length=16)
+    recipient_ids: List[int] = Field(default_factory=list)
+    recipient_scope: str = Field(default="selected", max_length=32)
+    recipient_kind: str = Field(default="students", max_length=32)
+    department_id: Optional[int] = None
+    course_id: Optional[int] = None
+    semester_id: Optional[int] = None
+    class_id: Optional[int] = None
+    section: Optional[str] = Field(default=None, max_length=80)
+    send_email: bool = False
 
 
 class SystemConfigOut(BaseModel):

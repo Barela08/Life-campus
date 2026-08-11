@@ -51,10 +51,19 @@ def start_session(req: schemas.StartSessionRequest,
     cls = db.query(models.Class).get(req.class_id)
     if not dept or not cls:
         raise HTTPException(status_code=404, detail="Department or Class not found")
+    subject_id = req.subject_id
+    if user.role == "teacher" and teacher.subject_id:
+        if subject_id and subject_id != teacher.subject_id:
+            raise HTTPException(status_code=403, detail="You may only take attendance for your assigned subject")
+        subject_id = teacher.subject_id
+    if subject_id:
+        subject = db.get(models.Subject, subject_id)
+        if not subject or subject.department_id != req.department_id:
+            raise HTTPException(status_code=422, detail="Subject does not belong to the selected department")
 
     session = models.AttendanceSession(
         teacher_id=teacher.id, department_id=req.department_id,
-        subject_id=None, class_id=req.class_id, section=req.section,
+        subject_id=subject_id, class_id=req.class_id, section=req.section,
         camera_id=req.camera_id, status="active",
     )
     db.add(session); db.commit(); db.refresh(session)
@@ -68,6 +77,8 @@ def stop_session(session_id: int,
     session = db.query(models.AttendanceSession).get(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
+    if user.role == "teacher" and (not session.teacher or session.teacher.user_id != user.id):
+        raise HTTPException(status_code=403, detail="You may only stop your own attendance session")
     if session.status == "closed":
         return {"message": "Session already closed"}
     session.status = "closed"
@@ -81,10 +92,12 @@ def stop_session(session_id: int,
 
 
 @router.get("/session/{session_id}")
-def get_session(session_id: int, db: Session = Depends(get_db)):
+def get_session(session_id: int, user: models.User = Depends(security.require_roles("teacher", "admin")), db: Session = Depends(get_db)):
     session = db.query(models.AttendanceSession).get(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
+    if user.role == "teacher" and (not session.teacher or session.teacher.user_id != user.id):
+        raise HTTPException(status_code=403, detail="You may only record attendance for your own session")
     records = db.query(models.AttendanceRecord).filter(models.AttendanceRecord.session_id == session_id).all()
     return {
         "session_id": session.id,
@@ -108,6 +121,8 @@ def manual_attendance(req: schemas.ManualAttendanceRequest,
     student = db.query(models.Student).get(req.student_id)
     if not student:
         raise HTTPException(status_code=404, detail="Student not found")
+    if user.role == "teacher" and (not session.teacher or session.teacher.user_id != user.id):
+        raise HTTPException(status_code=403, detail="You may only record attendance for your own session")
     if attendance_service.is_duplicate(db, session.id, student.id):
         raise HTTPException(status_code=400, detail="Attendance already recorded")
     now = datetime.now()

@@ -4,6 +4,7 @@ import { useAuth } from '../store/auth'
 import { useTheme } from '../store/theme'
 import { useBranding } from '../store/branding'
 import { cn } from '../lib/utils'
+import NotificationBell from './NotificationBell'
 import {
   LayoutDashboard, Users, GraduationCap, Building2, BookOpen, Layers,
   CalendarCheck, FileText, Bell, UserCircle, Settings,
@@ -19,7 +20,6 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
   const [open, setOpen] = useState(false)
   const navigate = useNavigate()
   const location = useLocation()
-  const [notifOpen, setNotifOpen] = useState(false)
 
   const navItems: NavItem[] = [
     { to: '/admin', label: 'Dashboard', icon: <LayoutDashboard size={18} /> },
@@ -34,6 +34,10 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
     { to: '/admin/reports', label: 'Reports', icon: <FileText size={18} /> },
     { to: '/admin/analytics', label: 'Analytics', icon: <BarChart3 size={18} /> },
     { to: '/admin/notifications', label: 'Notifications', icon: <Bell size={18} /> },
+    { to: '/admin/leave', label: 'Leave Management', icon: <CalendarCheck size={18} /> },
+    { to: '/admin/staff', label: 'Staff Management', icon: <Users size={18} /> },
+    { to: '/admin/roles', label: 'Roles & Permissions', icon: <ShieldCheck size={18} /> },
+    { to: '/admin/requests', label: 'Change Requests', icon: <ShieldCheck size={18} /> },
     { to: '/admin/settings', label: 'Settings', icon: <Settings size={18} /> },
   ]
 
@@ -98,17 +102,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
             <button onClick={toggle} className="p-2 rounded-xl hover:bg-gray-100 dark:hover:bg-gray-800 transition">
               {dark ? <Sun size={18} /> : <Moon size={18} />}
             </button>
-            <div className="relative">
-              <button onClick={() => setNotifOpen(!notifOpen)} className="p-2 rounded-xl hover:bg-gray-100 dark:hover:bg-gray-800 transition relative">
-                <Bell size={18} />
-              </button>
-              {notifOpen && (
-                <div className="absolute right-0 mt-2 w-72 card p-3 text-sm animate-slide-up">
-                  <p className="font-semibold mb-2">Notifications</p>
-                  <p className="text-gray-400 text-xs">No notifications yet</p>
-                </div>
-              )}
-            </div>
+            <NotificationBell />
             <div className="flex items-center gap-2 pl-2 border-l border-gray-200 dark:border-gray-700">
               <div className="w-8 h-8 rounded-full bg-primary-500 text-white flex items-center justify-center text-sm font-semibold">
                 {(user?.full_name || 'A').charAt(0).toUpperCase()}

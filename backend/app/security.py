@@ -63,6 +63,20 @@ def require_roles(*roles: str):
     return checker
 
 
+def has_permission(db: Session, user: models.User, permission: str) -> bool:
+    if user.role == "admin":
+        return True
+    return db.query(models.UserRole).join(models.RolePermission, models.UserRole.role_id == models.RolePermission.role_id).join(models.Permission, models.RolePermission.permission_id == models.Permission.id).filter(models.UserRole.user_id == user.id, models.Permission.code == permission).first() is not None
+
+
+def require_permission(permission: str):
+    def checker(user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+        if not has_permission(db, user, permission):
+            raise HTTPException(status_code=403, detail="Missing required permission")
+        return user
+    return checker
+
+
 def audit(db: Session, user_id: int, action: str, detail: str = ""):
     db.add(models.AuditLog(user_id=user_id, action=action, detail=detail))
     db.commit()

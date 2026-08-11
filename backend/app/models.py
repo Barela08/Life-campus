@@ -1,5 +1,5 @@
 from datetime import datetime, date
-from sqlalchemy import Column, Integer, String, Float, Boolean, DateTime, Date, ForeignKey, Text, Table
+from sqlalchemy import Column, Integer, String, Float, Boolean, DateTime, Date, ForeignKey, Text, Table, JSON
 from sqlalchemy.orm import relationship
 from .database import Base
 
@@ -118,10 +118,15 @@ class Teacher(Base):
     email = Column(String, unique=True, index=True, nullable=False)
     phone = Column(String, default="")
     department_id = Column(Integer, ForeignKey("departments.id"))
+    subject_id = Column(Integer, ForeignKey("subjects.id"), nullable=True)
+    class_id = Column(Integer, ForeignKey("classes.id"), nullable=True)
+    section = Column(String, default="")
     created_at = Column(DateTime, default=datetime.utcnow)
 
     user = relationship("User", back_populates="teacher")
     department = relationship("Department")
+    subject = relationship("Subject")
+    class_ = relationship("Class")
     sessions = relationship("AttendanceSession", back_populates="teacher")
 
 
@@ -211,11 +216,39 @@ class Notification(Base):
     __tablename__ = "notifications"
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), index=True)
+    sender_user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    sender_name = Column(String, default="")
+    sender_role = Column(String, default="system")
     title = Column(String, default="")
     message = Column(Text, default="")
     type = Column(String, default="info")  # info, success, warning, danger
+    priority = Column(String, default="normal")
     is_read = Column(Boolean, default=False)
+    read_at = Column(DateTime, nullable=True)
+    email_requested = Column(Boolean, default=False)
+    email_status = Column(String, default="not_requested")
+    email_error = Column(Text, default="")
+    related_request_id = Column(Integer, ForeignKey("approval_requests.id"), nullable=True, index=True)
     created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class ApprovalRequest(Base):
+    __tablename__ = "approval_requests"
+    id = Column(Integer, primary_key=True, index=True)
+    requester_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    requester_role = Column(String, nullable=False, index=True)
+    target_user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    request_type = Column(String, nullable=False, default="profile_change", index=True)
+    requested_changes = Column(JSON, nullable=False)
+    old_values = Column(JSON, nullable=False, default=dict)
+    changed_fields = Column(JSON, nullable=False, default=list)
+    reason = Column(Text, default="")
+    status = Column(String, nullable=False, default="pending", index=True)
+    reviewed_by = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    reviewed_at = Column(DateTime, nullable=True)
+    rejection_reason = Column(Text, default="")
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
 class EmailLog(Base):
@@ -252,6 +285,8 @@ class SystemConfig(Base):
     key = Column(String, unique=True, index=True, nullable=False)
     value = Column(Text, default="")
     description = Column(Text, default="")
+    is_secret = Column(Boolean, default=False)
+    updated_by = Column(Integer, ForeignKey("users.id"), nullable=True)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
@@ -263,6 +298,16 @@ class LeaveRequest(Base):
     reason = Column(Text, default="")
     date = Column(Date, nullable=True)
     status = Column(String, default="pending")  # pending, approved, rejected
+    applicant_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    applicant_role = Column(String, default="student", index=True)
+    leave_type = Column(String, default="general")
+    from_date = Column(Date, nullable=True)
+    to_date = Column(Date, nullable=True)
+    attachment_url = Column(String, default="")
+    reviewed_by = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    reviewed_at = Column(DateTime, nullable=True)
+    rejection_reason = Column(Text, default="")
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
@@ -273,4 +318,46 @@ class PasswordResetToken(Base):
     token = Column(String, unique=True, index=True, nullable=False)
     expires_at = Column(DateTime, nullable=False)
     used = Column(Boolean, default=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    otp_hash = Column(String, default="")
+    attempt_count = Column(Integer, default=0)
+    verified_at = Column(DateTime, nullable=True)
+
+
+class Role(Base):
+    __tablename__ = "roles"
+    id = Column(Integer, primary_key=True)
+    name = Column(String, unique=True, nullable=False, index=True)
+    description = Column(Text, default="")
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class Permission(Base):
+    __tablename__ = "permissions"
+    id = Column(Integer, primary_key=True)
+    code = Column(String, unique=True, nullable=False, index=True)
+    description = Column(Text, default="")
+
+
+class RolePermission(Base):
+    __tablename__ = "role_permissions"
+    role_id = Column(Integer, ForeignKey("roles.id", ondelete="CASCADE"), primary_key=True)
+    permission_id = Column(Integer, ForeignKey("permissions.id", ondelete="CASCADE"), primary_key=True)
+
+
+class UserRole(Base):
+    __tablename__ = "user_roles"
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    role_id = Column(Integer, ForeignKey("roles.id", ondelete="CASCADE"), primary_key=True)
+
+
+class StaffProfile(Base):
+    __tablename__ = "staff_profiles"
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), unique=True, nullable=False)
+    department_id = Column(Integer, ForeignKey("departments.id"), nullable=True)
+    subject_id = Column(Integer, ForeignKey("subjects.id"), nullable=True)
+    class_id = Column(Integer, ForeignKey("classes.id"), nullable=True)
+    section = Column(String, default="")
+    status = Column(String, default="active")
     created_at = Column(DateTime, default=datetime.utcnow)

@@ -38,7 +38,7 @@ export default function TeacherProfile() {
     setSaving(true)
     try {
       await updateProfile({ full_name: fullName, email, phone })
-      toast.success('✓ Profile updated successfully')
+      toast.success('Profile change request submitted successfully')
       await refreshUser()
     } catch (err: any) {
       toast.error(err.response?.data?.detail || '✕ Could not save changes')

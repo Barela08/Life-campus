@@ -1,6 +1,5 @@
 import React, { useEffect, useState } from 'react'
 import api, { apiErrorMessage } from '../../lib/api'
-import StudentLayout from '../../components/StudentLayout'
 import { StatCard, PageHeader, Loading, Badge } from '../../components/ui'
 import { CalendarCheck, UserCheck, UserX, TrendingUp, Award } from 'lucide-react'
 import { Link } from 'react-router-dom'
@@ -22,12 +21,12 @@ export default function StudentDashboard() {
       .finally(() => setLoading(false))
   }, [])
 
-  if (loading) return <StudentLayout><PageHeader title="Dashboard" /><div className="text-center p-8">Loading...</div></StudentLayout>
-  if (error) return <StudentLayout><PageHeader title="Dashboard" /><div className="text-center p-8 text-red-500">{error}</div></StudentLayout>
-  if (!data) return <StudentLayout><PageHeader title="Dashboard" /><div className="text-center p-8">No data available.</div></StudentLayout>
+  if (loading) return <><PageHeader title="Dashboard" /><div className="text-center p-8">Loading...</div></>
+  if (error) return <><PageHeader title="Dashboard" /><div className="text-center p-8 text-red-500">{error}</div></>
+  if (!data) return <><PageHeader title="Dashboard" /><div className="text-center p-8">No data available.</div></>
 
   return (
-    <StudentLayout>
+    <>
       <PageHeader title="Student Dashboard" subtitle={`Welcome, ${user?.full_name || 'Student'}`} />
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
         <StatCard icon={<CalendarCheck size={22} />} label="Total Classes" value={data.total} color="bg-primary-100 text-primary-600 dark:bg-primary-500/20 dark:text-primary-400" />
@@ -79,6 +78,6 @@ export default function StudentDashboard() {
           )}
         </div>
       </div>
-    </StudentLayout>
+    </>
   )
 }

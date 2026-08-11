@@ -1,0 +1,12 @@
+ALTER TABLE teachers ADD COLUMN IF NOT EXISTS subject_id bigint REFERENCES subjects(id);
+ALTER TABLE teachers ADD COLUMN IF NOT EXISTS class_id bigint REFERENCES classes(id);
+ALTER TABLE teachers ADD COLUMN IF NOT EXISTS section text NOT NULL DEFAULT '';
+CREATE INDEX IF NOT EXISTS teachers_subject_idx ON teachers(subject_id);
+CREATE TABLE IF NOT EXISTS roles (id bigserial PRIMARY KEY, name text NOT NULL UNIQUE, description text NOT NULL DEFAULT '', created_at timestamptz NOT NULL DEFAULT now());
+CREATE TABLE IF NOT EXISTS permissions (id bigserial PRIMARY KEY, code text NOT NULL UNIQUE, description text NOT NULL DEFAULT '');
+CREATE TABLE IF NOT EXISTS role_permissions (role_id bigint NOT NULL REFERENCES roles(id) ON DELETE CASCADE, permission_id bigint NOT NULL REFERENCES permissions(id) ON DELETE CASCADE, PRIMARY KEY(role_id, permission_id));
+CREATE TABLE IF NOT EXISTS user_roles (user_id bigint NOT NULL REFERENCES users(id) ON DELETE CASCADE, role_id bigint NOT NULL REFERENCES roles(id) ON DELETE CASCADE, PRIMARY KEY(user_id, role_id));
+CREATE TABLE IF NOT EXISTS staff_profiles (id bigserial PRIMARY KEY, user_id bigint NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE, department_id bigint REFERENCES departments(id), subject_id bigint REFERENCES subjects(id), class_id bigint REFERENCES classes(id), section text NOT NULL DEFAULT '', status text NOT NULL DEFAULT 'active', created_at timestamptz NOT NULL DEFAULT now());
+ALTER TABLE staff_profiles ADD COLUMN IF NOT EXISTS class_id bigint REFERENCES classes(id);
+ALTER TABLE staff_profiles ADD COLUMN IF NOT EXISTS section text NOT NULL DEFAULT '';
+CREATE INDEX IF NOT EXISTS user_roles_user_idx ON user_roles(user_id);

@@ -4,10 +4,11 @@ import { useAuth } from '../store/auth'
 import { useTheme } from '../store/theme'
 import { useBranding } from '../store/branding'
 import MaintenanceMode from './MaintenanceMode'
+import NotificationBell from './NotificationBell'
 import { cn } from '../lib/utils'
 import {
   LayoutDashboard, CalendarCheck, Bell, UserCircle, LogOut, Moon, Sun,
-  Menu, X, ShieldCheck, Download, PieChart,
+  Menu, X, ShieldCheck, Download, PieChart, ClipboardList,
 } from 'lucide-react'
 
 interface NavItem { to: string; label: string; icon: React.ReactNode }
@@ -19,7 +20,6 @@ export default function StudentLayout({ children }: { children: React.ReactNode 
   const [open, setOpen] = useState(false)
   const navigate = useNavigate()
   const location = useLocation()
-  const [notifOpen, setNotifOpen] = useState(false)
 
   if (maintenanceMode && user?.role !== 'admin') {
     return <MaintenanceMode />
@@ -32,6 +32,8 @@ export default function StudentLayout({ children }: { children: React.ReactNode 
     { to: '/student/download', label: 'Download Reports', icon: <Download size={18} /> },
     { to: '/student/notifications', label: 'Notifications', icon: <Bell size={18} /> },
     { to: '/student/profile', label: 'Profile', icon: <UserCircle size={18} /> },
+    { to: '/student/requests', label: 'My Requests', icon: <ClipboardList size={18} /> },
+    { to: '/student/leave', label: 'My Leave', icon: <CalendarCheck size={18} /> },
   ]
 
   return (
@@ -95,17 +97,7 @@ export default function StudentLayout({ children }: { children: React.ReactNode 
             <button onClick={toggle} className="p-2 rounded-xl hover:bg-gray-100 dark:hover:bg-gray-800 transition">
               {dark ? <Sun size={18} /> : <Moon size={18} />}
             </button>
-            <div className="relative">
-              <button onClick={() => setNotifOpen(!notifOpen)} className="p-2 rounded-xl hover:bg-gray-100 dark:hover:bg-gray-800 transition relative">
-                <Bell size={18} />
-              </button>
-              {notifOpen && (
-                <div className="absolute right-0 mt-2 w-72 card p-3 text-sm animate-slide-up">
-                  <p className="font-semibold mb-2">Notifications</p>
-                  <p className="text-gray-400 text-xs">No notifications yet</p>
-                </div>
-              )}
-            </div>
+            <NotificationBell />
             <div className="flex items-center gap-2 pl-2 border-l border-gray-200 dark:border-gray-700">
               <div className="w-8 h-8 rounded-full bg-emerald-500 text-white flex items-center justify-center text-sm font-semibold">
                 {(user?.full_name || 'S').charAt(0).toUpperCase()}

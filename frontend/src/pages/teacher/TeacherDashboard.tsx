@@ -20,11 +20,6 @@ export default function TeacherDashboard() {
   useEffect(() => { load() }, [])
 
   // Realtime updates — poll every 3s so attendance shows up immediately
-  useEffect(() => {
-    const i = setInterval(() => { load() }, 3000)
-    return () => clearInterval(i)
-  }, [])
-
   if (loading || !data) return <TeacherLayout><Loading /></TeacherLayout>
 
   return (

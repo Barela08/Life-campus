@@ -2,6 +2,7 @@ import base64
 import json
 import os
 import time
+import threading
 from io import BytesIO
 from typing import Optional
 
@@ -17,44 +18,53 @@ from .config import settings
 
 _face_app = None
 _face_engine = None
+_engine_initialized = False
+_engine_lock = threading.Lock()
+_analysis_cache: dict[str, tuple[float, dict]] = {}
+_analysis_cache_lock = threading.Lock()
 
 
-# Try InsightFace first.
-# If unavailable, fall back to face_recognition.
-try:
-    from insightface.app import FaceAnalysis
+def _cache_key(image_b64: str) -> str:
+    # Frames are large; keep only a short deterministic key, never expose it.
+    import hashlib
+    return hashlib.sha256(image_b64.encode()).hexdigest()
 
-    _face_app = FaceAnalysis(
-        name="buffalo_l",
-        providers=["CPUExecutionProvider"],
-    )
 
-    _face_app.prepare(
-        ctx_id=0,
-        det_size=(640, 640),
-    )
+def _cached_attendance_analysis(image_b64: str) -> dict:
+    key, now = _cache_key(image_b64), time.monotonic()
+    with _analysis_cache_lock:
+        cached = _analysis_cache.get(key)
+        if cached and now - cached[0] < 3:
+            return cached[1]
+    result = analyze_attendance_frame(image_b64)
+    with _analysis_cache_lock:
+        _analysis_cache.clear()  # one current camera frame is sufficient
+        _analysis_cache[key] = (now, result)
+    return result
 
-    _face_engine = "insightface"
 
-except (ImportError, ModuleNotFoundError):
-    try:
-        import face_recognition
-
-        _face_engine = "face_recognition"
-
-    except (ImportError, ModuleNotFoundError):
-        _face_engine = None
-
-except Exception:
-    _face_app = None
-
-    try:
-        import face_recognition
-
-        _face_engine = "face_recognition"
-
-    except (ImportError, ModuleNotFoundError):
-        _face_engine = None
+def _ensure_engine() -> str | None:
+    """Lazy, process-wide model initialization; never load a model per frame."""
+    global _face_app, _face_engine, _engine_initialized
+    if _engine_initialized:
+        return _face_engine
+    with _engine_lock:
+        if _engine_initialized:
+            return _face_engine
+        try:
+            from insightface.app import FaceAnalysis
+            _face_app = FaceAnalysis(name="buffalo_l", providers=["CPUExecutionProvider"])
+            # 480 keeps CPU detection responsive while retaining adequate facial detail.
+            _face_app.prepare(ctx_id=-1, det_size=(480, 480))
+            _face_engine = "insightface"
+        except Exception:
+            try:
+                import face_recognition  # noqa: F401
+                _face_engine = "face_recognition"
+            except Exception:
+                _face_engine = None
+        _engine_initialized = True
+    return _face_engine
 
 
 # ============================================================
@@ -99,14 +109,15 @@ def _detect_faces(
     image: np.ndarray,
 ) -> list:
 
-    if _face_engine == "insightface":
+    engine = _ensure_engine()
+    if engine == "insightface":
 
         if _face_app is None:
             return []
 
-        return _face_app.get(image)
+        return _face_app.get(np.ascontiguousarray(image[:, :, ::-1]))
 
-    if _face_engine == "face_recognition":
+    if engine == "face_recognition":
 
         import face_recognition
 
@@ -134,6 +145,10 @@ def _to_embedding(
     Exactly one face is required.
     """
 
+    cached = _analysis_cache.get(_cache_key(image_b64))
+    if cached and time.monotonic() - cached[0] < 3:
+        result = cached[1]
+        return result.get("embedding"), result.get("face_count", 0)
     image = _image_to_numpy(
         image_b64
     )
@@ -335,9 +350,14 @@ def match_face(
             )
         )
 
-    embedding, face_count = _to_embedding(
-        image_b64
-    )
+    embedding, face_count = _to_embedding(image_b64)
+    return match_embedding(embedding, face_count, known_embeddings, threshold)
+
+
+def match_embedding(embedding, face_count: int, known_embeddings: list, threshold: Optional[float] = None):
+    """Compare an already extracted embedding without re-running detection."""
+    if threshold is None:
+        threshold = float(getattr(settings, "FACE_MATCH_THRESHOLD", 0.50))
 
     # No face.
     if embedding is None:
@@ -379,7 +399,7 @@ def match_face(
         try:
 
             if (
-                _face_engine
+                _ensure_engine()
                 == "face_recognition"
             ):
 
@@ -714,6 +734,58 @@ def check_image_quality(
 
 
 # ============================================================
+# SINGLE-PASS ATTENDANCE FRAME ANALYSIS
+# ============================================================
+
+def analyze_attendance_frame(image_b64: str) -> dict:
+    """Decode, detect, quality-check and embed exactly once for attendance."""
+    cached = _analysis_cache.get(_cache_key(image_b64))
+    if cached and time.monotonic() - cached[0] < 3:
+        result = cached[1]
+        return {"passed": result["passed"], "reason": result["reason"] if not result["passed"] else "OK", **result.get("quality", {})}
+    try:
+        image = _image_to_numpy(image_b64)
+        gray = np.mean(image, axis=2)
+        blur_score = _laplacian(gray)
+        brightness = float(np.mean(gray))
+        faces = _detect_faces(image)
+        if len(faces) != 1:
+            return {"passed": False, "reason": "No face detected." if not faces else "Multiple faces detected. Please keep only one student in front of the camera.", "face_count": len(faces)}
+        if blur_score < float(getattr(settings, "FACE_MIN_BLUR_SCORE", 30)):
+            return {"passed": False, "reason": "Face image is blurry.", "face_count": 1}
+        if not float(getattr(settings, "FACE_MIN_BRIGHTNESS", 40)) <= brightness <= float(getattr(settings, "FACE_MAX_BRIGHTNESS", 245)):
+            return {"passed": False, "reason": "Lighting is insufficient." if brightness < 40 else "Lighting is too bright.", "face_count": 1}
+        face = faces[0]
+        if _ensure_engine() == "insightface":
+            x1, y1, x2, y2 = np.asarray(face.bbox)
+            area = max(0, x2-x1) * max(0, y2-y1)
+            embedding = getattr(face, "normed_embedding", None)
+            if embedding is None:
+                embedding = getattr(face, "embedding", None)
+        else:
+            import face_recognition
+            top, right, bottom, left = face
+            area = max(0, right-left) * max(0, bottom-top)
+            encodings = face_recognition.face_encodings(image, known_face_locations=faces, num_jitters=1, model="small")
+            embedding = encodings[0] if encodings else None
+        if area / max(1, image.shape[0] * image.shape[1]) < float(getattr(settings, "FACE_MIN_AREA_RATIO", 0.04)):
+            return {"passed": False, "reason": "Face is too far.", "face_count": 1}
+        if embedding is None:
+            return {"passed": False, "reason": "Face embedding could not be generated.", "face_count": 1}
+        embedding = np.asarray(embedding, dtype=np.float64)
+        norm = np.linalg.norm(embedding)
+        if norm <= 1e-12: return {"passed": False, "reason": "Face embedding could not be generated.", "face_count": 1}
+        embedding = (embedding / norm).tolist()
+        # This is explicitly a quality heuristic, not biometric anti-spoofing.
+        live_score = min(max(blur_score / 120.0, 0.0), 1.0) * 0.9 + 0.1
+        if live_score < float(getattr(settings, "LIVENESS_MIN_SCORE", 0.35)):
+            return {"passed": False, "reason": "Image quality is too low.", "face_count": 1, "liveness": {"passed": False, "score": round(live_score, 3), "heuristic": True}}
+        return {"passed": True, "embedding": embedding, "face_count": 1, "liveness": {"passed": True, "score": round(live_score, 3), "heuristic": True}, "quality": {"blur_score": round(blur_score, 2), "brightness": round(brightness, 2)}}
+    except Exception:
+        return {"passed": False, "reason": "Face image validation failed.", "face_count": 0}
+
+
+# ============================================================
 # LIVENESS
 # ============================================================
 
@@ -726,6 +798,12 @@ def liveness_check(
     This is NOT certified anti-spoofing.
     """
 
+    analysis = _cached_attendance_analysis(image_b64)
+    return analysis.get("liveness", {"passed": False, "score": 0.0, "reason": analysis.get("reason", "Image quality is too low.")})
+    cached = _analysis_cache.get(_cache_key(image_b64))
+    if cached and time.monotonic() - cached[0] < 3:
+        result = cached[1]
+        return result.get("liveness", {"passed": result["passed"], "score": 0.0, "reason": result.get("reason", "OK")})
     try:
 
         image = _image_to_numpy(
@@ -952,8 +1030,4 @@ def decrypt_embedding(
 # ============================================================
 
 def get_engine() -> str:
-    return (
-        _face_engine
-        if _face_engine
-        else "unavailable"
-    )
+    return _ensure_engine() or "unavailable"

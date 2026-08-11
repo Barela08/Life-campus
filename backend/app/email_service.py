@@ -1,6 +1,6 @@
-import smtplib
 import time
 import html
+import smtplib
 from datetime import datetime
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -110,7 +110,7 @@ def _send(
                 )
 
                 server.sendmail(
-                    smtp_username,
+                    from_addr,
                     [to_email],
                     msg.as_string(),
                 )
@@ -125,6 +125,40 @@ def _send(
                 time.sleep(1.0)
 
     return False, last_error or "Unknown SMTP error"
+
+
+def send_email(to_email: str, subject: str, html_body: str, retries: int = 2) -> Tuple[bool, str]:
+    """The single SMTP gateway used by every backend email workflow."""
+    return _send(to_email, subject, html_body, retries)
+
+
+def send_notification_email(
+    to_email: str,
+    recipient_name: str,
+    title: str,
+    message: str,
+    notification_type: str,
+    sender_name: str,
+    sent_at: datetime,
+) -> Tuple[bool, str]:
+    """Send one private, professional notification email to one recipient."""
+    subject = f"[LifeOS Smart Campus] {title}"
+    html_body = f"""
+    <div style="font-family:Arial,sans-serif;color:#1f2937;max-width:640px;margin:auto;padding:24px">
+      <h2 style="color:#047857;margin-top:0">LifeOS Smart Campus</h2>
+      <p>Hello {_safe(recipient_name)},</p>
+      <p>You have received a new notification from LifeOS Smart Campus.</p>
+      <div style="border:1px solid #d1d5db;border-radius:10px;padding:18px;background:#f9fafb">
+        <p><strong>Title:</strong> {_safe(title)}</p>
+        <p style="white-space:pre-wrap"><strong>Message:</strong><br>{_safe(message)}</p>
+        <p><strong>Type:</strong> {_safe(notification_type.title())}</p>
+        <p><strong>Sent by:</strong> {_safe(sender_name)}</p>
+        <p><strong>Date:</strong> {_safe(sent_at.strftime('%d %B %Y, %I:%M %p'))}</p>
+      </div>
+      <p>Please log in to LifeOS Smart Campus for more details.</p>
+      <p>Regards,<br>LifeOS Smart Campus</p>
+    </div>"""
+    return _send(to_email, subject, html_body)
 
 
 # ============================================================
@@ -312,6 +346,88 @@ This is an automated notification from
 </body>
 </html>
 """
+
+
+def build_basic_email(
+    title: str,
+    greeting: str,
+    message: str,
+    rows: Optional[Dict[str, Any]] = None,
+) -> str:
+    return _basic_html(title, greeting, message, rows)
+
+
+def _safe_delivery_error(error: object) -> str:
+    text = str(error or "").strip()
+    for secret in (
+        _setting("SMTP_PASSWORD", ""),
+        _setting("SMTP_USERNAME", ""),
+        _setting("SMTP_FROM_EMAIL", ""),
+    ):
+        if secret:
+            text = text.replace(secret, "[redacted]")
+    return (text or "Email delivery failed")[:1000]
+
+
+def _login_url() -> str:
+    return (
+        _setting("APP_LOGIN_URL", None)
+        or _setting("FRONTEND_LOGIN_URL", None)
+        or _setting("FRONTEND_URL", None)
+        or "http://localhost:5173/login"
+    )
+
+
+def send_welcome_student_email(
+    db: Session,
+    to_email: str,
+    full_name: str,
+    temp_password: str,
+    rows: Dict[str, Any],
+) -> Tuple[bool, str]:
+    subject = "Welcome to LifeOS Smart Campus - Your Student Account"
+    body_rows = {
+        **rows,
+        "Login Email": to_email,
+        "Temporary Password": temp_password,
+        "Login": _login_url(),
+    }
+    html_body = _basic_html(
+        "Your Student Account Is Ready",
+        full_name,
+        "Your LifeOS Smart Campus account has been created. Please log in and change your temporary password immediately.",
+        body_rows,
+    )
+    ok, error = _send(to_email, subject, html_body)
+    safe_error = "" if ok else _safe_delivery_error(error)
+    log_email(db, to_email, subject, "welcome_student", "sent" if ok else "failed", safe_error)
+    return ok, safe_error
+
+
+def send_welcome_staff_email(
+    db: Session,
+    to_email: str,
+    full_name: str,
+    temp_password: str,
+    rows: Dict[str, Any],
+) -> Tuple[bool, str]:
+    subject = "Welcome to LifeOS Smart Campus - Your Staff Account"
+    body_rows = {
+        **rows,
+        "Login Email": to_email,
+        "Temporary Password": temp_password,
+        "Login": _login_url(),
+    }
+    html_body = _basic_html(
+        "Your Staff Account Is Ready",
+        full_name,
+        "Your LifeOS Smart Campus staff account has been created. Please log in and change your temporary password immediately.",
+        body_rows,
+    )
+    ok, error = _send(to_email, subject, html_body)
+    safe_error = "" if ok else _safe_delivery_error(error)
+    log_email(db, to_email, subject, "welcome_staff", "sent" if ok else "failed", safe_error)
+    return ok, safe_error
 
 
 # ============================================================
@@ -1167,4 +1283,31 @@ def send_leave_notification(
         error,
     )
 
+    return ok, error
+
+
+def send_new_leave_request_email(db: Session, to_email: str, reviewer_name: str, applicant_name: str,
+                                 applicant_role: str, from_date: object, to_date: object, reason: str) -> Tuple[bool, str]:
+    """Notify an administrator after the leave request has committed successfully."""
+    subject = "LifeOS Smart Campus - New Leave Request"
+    body = _basic_html("New Leave Request", reviewer_name, "A leave request requires your review.", {
+        "Applicant": applicant_name, "Role": applicant_role.title(), "Start Date": from_date,
+        "End Date": to_date, "Reason": reason, "Current Status": "Pending",
+    })
+    ok, error = send_email(to_email, subject, body)
+    log_email(db, to_email, subject, "leave_submitted", "sent" if ok else "failed", error)
+    return ok, error
+
+
+def send_leave_decision_email(db: Session, to_email: str, applicant_name: str, status: str, from_date: object,
+                              to_date: object, reason: str, reviewer_name: str, note: str = "") -> Tuple[bool, str]:
+    status_title = status.capitalize()
+    subject = f"LifeOS Smart Campus - Leave {status_title}"
+    rows = {"Name": applicant_name, "Leave dates": f"{from_date} to {to_date}", "Reason": reason,
+            f"{status_title} by": reviewer_name, "Status": status_title}
+    if note:
+        rows["Rejection reason" if status == "rejected" else "Review note"] = note
+    body = _basic_html(f"Leave {status_title}", applicant_name, f"Your leave request has been {status}.", rows)
+    ok, error = send_email(to_email, subject, body)
+    log_email(db, to_email, subject, f"leave_{status}", "sent" if ok else "failed", error)
     return ok, error

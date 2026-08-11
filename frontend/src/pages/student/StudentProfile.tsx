@@ -1,6 +1,5 @@
 import React, { useEffect, useState } from 'react'
 import api, { apiErrorMessage } from '../../lib/api'
-import StudentLayout from '../../components/StudentLayout'
 import { PageHeader, Card, Badge } from '../../components/ui'
 import toast from 'react-hot-toast'
 import { Mail, Phone, Building2, User, Hash, GraduationCap, Save, Loader, Percent } from 'lucide-react'
@@ -35,7 +34,7 @@ export default function StudentProfile() {
       await refreshUser() // Refresh user from token
       const res = await api.get('/student/profile') // Re-fetch student-specific profile data
       setProfile(res.data)
-      toast.success('Profile updated successfully')
+      toast.success('Profile change request submitted successfully')
     } catch (err: any) {
       toast.error(apiErrorMessage(err, 'Could not save profile'))
     } finally {
@@ -50,12 +49,12 @@ export default function StudentProfile() {
     catch (err: any) { toast.error(err.response?.data?.detail || 'Failed') }
   }
 
-  if (loading) return <StudentLayout><PageHeader title="Profile" /><div className="text-center p-8">Loading...</div></StudentLayout>
-  if (error) return <StudentLayout><PageHeader title="Profile" /><div className="text-center p-8 text-red-500">{error}</div></StudentLayout>
-  if (!profile) return <StudentLayout><PageHeader title="Profile" subtitle="Your account information" /></StudentLayout>
+  if (loading) return <><PageHeader title="Profile" /><div className="text-center p-8">Loading...</div></>
+  if (error) return <><PageHeader title="Profile" /><div className="text-center p-8 text-red-500">{error}</div></>
+  if (!profile) return <PageHeader title="Profile" subtitle="Your account information" />
 
   return (
-    <StudentLayout>
+    <>
       <PageHeader title="Profile" subtitle="Your account information" />
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2">
@@ -106,7 +105,7 @@ export default function StudentProfile() {
           </Card>
         </div>
       </div>
-    </StudentLayout>
+    </>
   )
 }
 

@@ -1,7 +1,6 @@
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
-from contextlib import asynccontextmanager
-from fastapi import FastAPI, Request
+import logging
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -11,8 +10,10 @@ from sqlalchemy.orm import Session
 from .config import settings
 from .database import engine, Base, SessionLocal
 from . import models, security
-from .routers import auth, admin, face, attendance, student, teacher, export
+from .routers import auth, admin, face, attendance, student, teacher, export, notifications, approvals, leave, roles
 from .face_service import get_engine
+
+logger = logging.getLogger("lifeos")
 
 settings.ensure_dirs()
 
@@ -61,6 +62,61 @@ def ensure_schema_updates():
                         continue
                     conn.execute(text(f"ALTER TABLE email_logs ADD COLUMN {column} {ddl}"))
 
+        if "notifications" in inspector.get_table_names():
+            existing = {col["name"] for col in inspector.get_columns("notifications")}
+            desired_notifications = {
+                "sender_user_id": "INTEGER",
+                "sender_name": "VARCHAR DEFAULT ''",
+                "sender_role": "VARCHAR DEFAULT 'system'",
+                "priority": "VARCHAR DEFAULT 'normal'",
+                "read_at": "TIMESTAMP",
+                "email_requested": "BOOLEAN DEFAULT FALSE",
+                "email_status": "VARCHAR DEFAULT 'not_requested'",
+                "email_error": "TEXT DEFAULT ''",
+            }
+            with engine.begin() as conn:
+                for column, ddl in desired_notifications.items():
+                    if column not in existing:
+                        conn.execute(text(f"ALTER TABLE notifications ADD COLUMN {column} {ddl}"))
+                if "related_request_id" not in existing:
+                    conn.execute(text("ALTER TABLE notifications ADD COLUMN related_request_id INTEGER"))
+        if "approval_requests" in inspector.get_table_names():
+            existing = {col["name"] for col in inspector.get_columns("approval_requests")}
+            json_array_ddl = "JSONB NOT NULL DEFAULT '[]'::jsonb" if engine.dialect.name == "postgresql" else "JSON DEFAULT '[]'"
+            desired_approval = {
+                "changed_fields": json_array_ddl,
+                "reason": "TEXT DEFAULT ''",
+            }
+            with engine.begin() as conn:
+                for column, ddl in desired_approval.items():
+                    if column not in existing:
+                        conn.execute(text(f"ALTER TABLE approval_requests ADD COLUMN {column} {ddl}"))
+        if "system_config" in inspector.get_table_names():
+            existing = {col["name"] for col in inspector.get_columns("system_config")}
+            with engine.begin() as conn:
+                if "is_secret" not in existing:
+                    conn.execute(text("ALTER TABLE system_config ADD COLUMN is_secret BOOLEAN DEFAULT FALSE"))
+                if "updated_by" not in existing:
+                    conn.execute(text("ALTER TABLE system_config ADD COLUMN updated_by INTEGER"))
+
+        if "leave_requests" in inspector.get_table_names():
+            existing = {col["name"] for col in inspector.get_columns("leave_requests")}
+            desired_leave = {
+                "applicant_id": "INTEGER", "applicant_role": "VARCHAR DEFAULT 'student'", "leave_type": "VARCHAR DEFAULT 'general'",
+                "from_date": "DATE", "to_date": "DATE", "attachment_url": "VARCHAR DEFAULT ''", "reviewed_by": "INTEGER",
+                "reviewed_at": "TIMESTAMP", "rejection_reason": "TEXT DEFAULT ''", "updated_at": "TIMESTAMP",
+            }
+            with engine.begin() as conn:
+                for column, ddl in desired_leave.items():
+                    if column not in existing:
+                        conn.execute(text(f"ALTER TABLE leave_requests ADD COLUMN {column} {ddl}"))
+        if "password_reset_tokens" in inspector.get_table_names():
+            existing = {col["name"] for col in inspector.get_columns("password_reset_tokens")}
+            with engine.begin() as conn:
+                for column, ddl in {"otp_hash": "VARCHAR DEFAULT ''", "attempt_count": "INTEGER DEFAULT 0", "verified_at": "TIMESTAMP"}.items():
+                    if column not in existing:
+                        conn.execute(text(f"ALTER TABLE password_reset_tokens ADD COLUMN {column} {ddl}"))
+
         if "unknown_face_logs" in inspector.get_table_names():
             existing = {col["name"] for col in inspector.get_columns("unknown_face_logs")}
             desired_unknowns = {
@@ -88,6 +144,8 @@ async def lifespan(app: FastAPI):
     Base.metadata.create_all(bind=engine)
     ensure_schema_updates()
     seed_admin()
+    from .runtime_config import apply_runtime_smtp_settings
+    apply_runtime_smtp_settings(db=SessionLocal())
     yield
 
 
@@ -113,6 +171,23 @@ app.include_router(attendance.router)
 app.include_router(student.router)
 app.include_router(teacher.router)
 app.include_router(export.router)
+app.include_router(notifications.router)
+app.include_router(approvals.router)
+app.include_router(leave.router)
+app.include_router(roles.router)
+
+
+@app.exception_handler(Exception)
+async def unexpected_error_handler(request: Request, exc: Exception):
+    """Log unexpected failures and create one debounced, safe admin alert."""
+    logger.exception("Unexpected server error on %s", request.url.path)
+    if not request.url.path.startswith("/api/notifications"):
+        try:
+            from .system_alerts import record_system_alert
+            record_system_alert("Unexpected server error", "An unexpected server error occurred. Please check the server logs.")
+        except Exception:
+            logger.exception("Unable to record system alert")
+    return JSONResponse(status_code=500, content={"detail": "A server error occurred. Please try again later."})
 
 
 @app.get("/api/health")

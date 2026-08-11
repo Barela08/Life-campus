@@ -1,6 +1,5 @@
 import React, { useEffect, useState } from 'react'
 import api, { apiErrorMessage } from '../../lib/api'
-import StudentLayout from '../../components/StudentLayout'
 import { PageHeader, Badge, Empty, Loading, SearchInput } from '../../components/ui'
 import toast from 'react-hot-toast'
 import { FileText, Download, Loader } from 'lucide-react'
@@ -49,7 +48,7 @@ export default function StudentAttendance() {
   }
 
   return (
-    <StudentLayout>
+    <>
       <PageHeader
         title="My Attendance"
         subtitle="Your complete attendance record"
@@ -83,6 +82,6 @@ export default function StudentAttendance() {
           </div>
         </div>
       )}
-    </StudentLayout>
+    </>
   )
 }

@@ -32,6 +32,9 @@ export default function Settings() {
   const [maintMode, setMaintMode] = useState(false)
   const [thresholdInput, setThresholdInput] = useState('0.6')
   const [savingBranding, setSavingBranding] = useState(false)
+  const [smtp, setSmtp] = useState({ smtp_host: '', smtp_port: 587, smtp_username: '', smtp_password: '', smtp_from_email: '', smtp_from_name: '', smtp_use_tls: true, email_enabled: true, smtp_password_configured: false })
+  const [savingSmtp, setSavingSmtp] = useState(false)
+  const [testEmail, setTestEmail] = useState('')
 
   // Load current profile & branding settings on mount
   useEffect(() => {
@@ -58,7 +61,20 @@ export default function Settings() {
         if (res.data.face_match_threshold) setThresholdInput(String(res.data.face_match_threshold))
       })
       .catch(() => {})
+    api.get('/admin/settings/email').then(res => setSmtp(current => ({ ...current, ...res.data, smtp_password: '' }))).catch(() => {})
   }, [user?.id])
+
+  const saveSmtp = async (event: React.FormEvent) => {
+    event.preventDefault(); setSavingSmtp(true)
+    try { await api.put('/admin/settings/email', smtp); setSmtp(current => ({ ...current, smtp_password: '', smtp_password_configured: Boolean(current.smtp_password) || current.smtp_password_configured })); toast.success('SMTP settings saved') }
+    catch (err: any) { toast.error(err.response?.data?.detail || 'Could not save SMTP settings') }
+    finally { setSavingSmtp(false) }
+  }
+  const sendTestEmail = async () => {
+    if (!testEmail) { toast.error('Enter a test recipient email'); return }
+    try { const res = await api.post('/admin/settings/email/test', { to_email: testEmail }); res.data.success ? toast.success(res.data.message) : toast.error(res.data.message) }
+    catch (err: any) { toast.error(err.response?.data?.detail || 'Test email failed. Please verify SMTP settings.') }
+  }
 
   const handleLogoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
@@ -280,7 +296,15 @@ export default function Settings() {
             </div>
           </Card>
           <Card>
-            <h3 className="font-semibold mb-4 flex items-center gap-2"><Mail size={18} className="text-blue-500" /> Email Notifications</h3>
+            <h3 className="font-semibold mb-4 flex items-center gap-2"><Mail size={18} className="text-blue-500" /> Email / SMTP Settings</h3>
+            <form className="space-y-3 mb-5" onSubmit={saveSmtp}>
+              <div className="grid grid-cols-2 gap-3"><div><label className="label">SMTP Host</label><input className="input" value={smtp.smtp_host} onChange={e => setSmtp({ ...smtp, smtp_host: e.target.value })} /></div><div><label className="label">SMTP Port</label><input className="input" type="number" value={smtp.smtp_port} onChange={e => setSmtp({ ...smtp, smtp_port: Number(e.target.value) })} /></div></div>
+              <div><label className="label">SMTP Username / Email</label><input className="input" value={smtp.smtp_username} onChange={e => setSmtp({ ...smtp, smtp_username: e.target.value })} /></div>
+              <div><label className="label">SMTP Password / App Password {smtp.smtp_password_configured && <span className="text-xs text-emerald-600">(configured)</span>}</label><input className="input" type="password" autoComplete="new-password" placeholder="Leave blank to keep current password" value={smtp.smtp_password} onChange={e => setSmtp({ ...smtp, smtp_password: e.target.value })} /></div>
+              <div className="grid grid-cols-2 gap-3"><div><label className="label">From Email</label><input className="input" type="email" value={smtp.smtp_from_email} onChange={e => setSmtp({ ...smtp, smtp_from_email: e.target.value })} /></div><div><label className="label">From Name</label><input className="input" value={smtp.smtp_from_name} onChange={e => setSmtp({ ...smtp, smtp_from_name: e.target.value })} /></div></div>
+              <div className="flex gap-5 text-sm"><label className="flex items-center gap-2"><input type="checkbox" checked={smtp.smtp_use_tls} onChange={e => setSmtp({ ...smtp, smtp_use_tls: e.target.checked })} /> TLS enabled</label><label className="flex items-center gap-2"><input type="checkbox" checked={smtp.email_enabled} onChange={e => setSmtp({ ...smtp, email_enabled: e.target.checked })} /> Email enabled</label></div>
+              <div className="flex gap-2"><button className="btn-primary" disabled={savingSmtp}>{savingSmtp ? 'Saving…' : 'Save Settings'}</button><input className="input flex-1" type="email" placeholder="Test recipient email" value={testEmail} onChange={e => setTestEmail(e.target.value)} /><button type="button" className="btn-secondary" onClick={() => void sendTestEmail()}>Test Email</button></div>
+            </form>
             <p className="text-sm text-gray-500 mb-3">SMTP is configured via backend environment variables. Automatic emails are sent for:</p>
             <ul className="text-sm text-gray-500 space-y-2">
               <li>• Attendance Marked</li>
@@ -294,4 +318,4 @@ export default function Settings() {
       </div>
     </AdminLayout>
   )
-}
+}

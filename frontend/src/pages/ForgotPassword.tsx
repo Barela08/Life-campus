@@ -1,52 +1,17 @@
-import React, { useState } from 'react'
-import api from '../lib/api'
+import { useEffect, useState } from 'react'
+import api, { apiErrorMessage } from '../lib/api'
 import toast from 'react-hot-toast'
-import { Loader2, ArrowLeft } from 'lucide-react'
+import { ArrowLeft, Loader2 } from 'lucide-react'
 
 export default function ForgotPassword() {
-  const [email, setEmail] = useState('')
-  const [loading, setLoading] = useState(false)
-  const [sent, setSent] = useState(false)
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault()
-    setLoading(true)
-    try {
-      await api.post('/auth/forgot-password', { email })
-      setSent(true)
-      toast.success('Reset link sent')
-    } catch (err: any) {
-      toast.error(err.response?.data?.detail || 'Failed to send reset link')
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  return (
-    <div className="min-h-screen flex items-center justify-center p-4 bg-gradient-to-br from-primary-50 via-white to-indigo-50 dark:from-gray-950 dark:via-gray-900 dark:to-gray-950">
-      <div className="w-full max-w-md card p-8 animate-slide-up">
-        <a href="/login" className="inline-flex items-center gap-1 text-sm text-gray-400 hover:text-gray-600 mb-4">
-          <ArrowLeft size={14} /> Back to login
-        </a>
-        <h1 className="text-2xl font-bold mb-1">Forgot Password</h1>
-        <p className="text-sm text-gray-500 dark:text-gray-400 mb-6">Enter your email and we'll send you a reset link.</p>
-        {sent ? (
-          <div className="text-center py-6">
-            <p className="text-emerald-600 font-medium mb-2">Reset link sent!</p>
-            <p className="text-sm text-gray-500">Check your email inbox for instructions.</p>
-          </div>
-        ) : (
-          <form onSubmit={handleSubmit} className="space-y-4">
-            <div>
-              <label className="label">Email</label>
-              <input className="input" type="email" value={email} onChange={(e) => setEmail(e.target.value)} required />
-            </div>
-            <button type="submit" disabled={loading} className="btn-primary w-full flex items-center justify-center gap-2">
-              {loading && <Loader2 size={16} className="animate-spin" />} Send Reset Link
-            </button>
-          </form>
-        )}
-      </div>
-    </div>
-  )
+  const [step, setStep] = useState<1 | 2 | 3 | 4>(1), [email, setEmail] = useState(''), [otp, setOtp] = useState(''), [resetToken, setResetToken] = useState(''), [password, setPassword] = useState(''), [confirm, setConfirm] = useState(''), [loading, setLoading] = useState(false), [cooldown, setCooldown] = useState(0)
+  useEffect(() => { if (!cooldown) return; const t = window.setInterval(() => setCooldown(v => v - 1), 1000); return () => clearInterval(t) }, [cooldown])
+  const send = async () => { setLoading(true); try { await api.post('/auth/forgot-password', { email }); setStep(2); setCooldown(30); toast.success('OTP has been sent to your registered email.') } catch (e) { toast.error(apiErrorMessage(e, 'Unable to send OTP email. Please try again.')) } finally { setLoading(false) } }
+  const verify = async () => { setLoading(true); try { const r = await api.post('/auth/verify-reset-otp', { email, otp }); setResetToken(r.data.reset_token); setStep(3); toast.success('OTP verified successfully') } catch (e) { toast.error(apiErrorMessage(e, 'Invalid OTP')) } finally { setLoading(false) } }
+  const reset = async () => { if (password !== confirm) return toast.error('Passwords do not match'); setLoading(true); try { await api.post('/auth/reset-password', { reset_token: resetToken, new_password: password, confirm_password: confirm }); setStep(4); toast.success('Password changed successfully') } catch (e) { toast.error(apiErrorMessage(e, 'Unable to change password')) } finally { setLoading(false) } }
+  return <div className="min-h-screen flex items-center justify-center p-4 bg-gradient-to-br from-primary-50 via-white to-indigo-50 dark:from-gray-950 dark:via-gray-900 dark:to-gray-950"><div className="w-full max-w-md card p-8"><a href="/login" className="inline-flex items-center gap-1 text-sm text-gray-400 mb-4"><ArrowLeft size={14} /> Back to login</a><h1 className="text-2xl font-bold">Forgot Password</h1><p className="text-sm text-gray-500 mb-6">{step === 1 ? 'Enter your registered email to receive an OTP.' : step === 2 ? 'Enter the six-digit OTP from your email. It expires in 5 minutes.' : step === 3 ? 'Create a new password for your account.' : 'Your password has been changed.'}</p>
+    {step === 1 && <form onSubmit={e => { e.preventDefault(); void send() }} className="space-y-4"><input className="input" required type="email" placeholder="Registered email" value={email} onChange={e => setEmail(e.target.value)} /><button className="btn-primary w-full" disabled={loading}>{loading ? <Loader2 className="animate-spin mx-auto" size={16} /> : 'Send OTP'}</button></form>}
+    {step === 2 && <div className="space-y-4"><input className="input text-center tracking-[.5em]" inputMode="numeric" maxLength={6} placeholder="______" value={otp} onChange={e => setOtp(e.target.value.replace(/\D/g, ''))} /><button className="btn-primary w-full" disabled={loading || otp.length !== 6} onClick={() => void verify()}>Verify OTP</button><button className="btn-secondary w-full" disabled={loading || cooldown > 0} onClick={() => void send()}>{cooldown ? `Resend OTP in ${cooldown}s` : 'Resend OTP'}</button></div>}
+    {step === 3 && <div className="space-y-4"><input className="input" type="password" placeholder="New password (minimum 8 characters)" value={password} onChange={e => setPassword(e.target.value)} /><input className="input" type="password" placeholder="Confirm new password" value={confirm} onChange={e => setConfirm(e.target.value)} /><button className="btn-primary w-full" disabled={loading || password.length < 8} onClick={() => void reset()}>Change Password</button></div>}
+    {step === 4 && <a href="/login" className="btn-primary block text-center">Back to Login</a>}</div></div>
 }

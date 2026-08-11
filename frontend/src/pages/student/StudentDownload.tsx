@@ -1,6 +1,5 @@
 import React from 'react'
 import api, { apiErrorMessage } from '../../lib/api'
-import StudentLayout from '../../components/StudentLayout'
 import { PageHeader } from '../../components/ui'
 import toast from 'react-hot-toast'
 import { FileText, FileSpreadsheet, FileDown, Download } from 'lucide-react'
@@ -32,7 +31,7 @@ export default function StudentDownload() {
   ]
 
   return (
-    <StudentLayout>
+    <>
       <PageHeader title="Download Reports" subtitle="Export your attendance records" />
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         {cards.map(c => (
@@ -44,6 +43,6 @@ export default function StudentDownload() {
           </button>
         ))}
       </div>
-    </StudentLayout>
+    </>
   )
 }

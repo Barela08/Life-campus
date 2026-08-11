@@ -4,6 +4,7 @@ import AdminLayout from '../../components/AdminLayout'
 import { StatCard, Badge, Loading, PageHeader } from '../../components/ui'
 import { Users, GraduationCap, Building2, BookOpen, CalendarCheck, AlertTriangle, UserCheck, UserX, Clock } from 'lucide-react'
 import { formatDate } from '../../lib/utils'
+import { Link } from 'react-router-dom'
 
 interface DashboardData {
   overview: { present: number; absent: number; late: number; total: number; today_present: number; today_absent: number }
@@ -16,12 +17,15 @@ interface DashboardData {
 export default function AdminDashboard() {
   const [data, setData] = useState<DashboardData | null>(null)
   const [loading, setLoading] = useState(true)
+  const [systemAlerts, setSystemAlerts] = useState(0)
 
   const load = async () => {
     setLoading(true)
     try {
       const res = await api.get('/admin/dashboard')
       setData(res.data)
+      const alerts = await api.get('/notifications', { params: { unread_only: true } })
+      setSystemAlerts(alerts.data.filter((item: any) => item.type === 'system' || item.type === 'error').length)
     } catch (e) {
       console.error(e)
     } finally {
@@ -32,11 +36,6 @@ export default function AdminDashboard() {
   useEffect(() => { load() }, [])
 
   // Realtime updates — poll every 3s so attendance shows up immediately
-  useEffect(() => {
-    const i = setInterval(() => { load() }, 3000)
-    return () => clearInterval(i)
-  }, [])
-
   if (loading || !data) return <AdminLayout><Loading /></AdminLayout>
 
   const o = data.overview
@@ -44,6 +43,7 @@ export default function AdminDashboard() {
   return (
     <AdminLayout>
       <PageHeader title="Admin Dashboard" subtitle="Overview of your campus" />
+      {systemAlerts > 0 && <Link to="/admin/notifications" className="mb-6 flex items-center gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-700 hover:bg-red-100"><AlertTriangle size={18} /> {systemAlerts} system alert{systemAlerts === 1 ? '' : 's'} require attention</Link>}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
         <StatCard icon={<Users size={22} />} label="Total Students" value={data.counts.students} color="bg-primary-100 text-primary-600 dark:bg-primary-500/20 dark:text-primary-400" />
         <StatCard icon={<GraduationCap size={22} />} label="Teachers" value={data.counts.teachers} color="bg-emerald-100 text-emerald-600 dark:bg-emerald-500/20 dark:text-emerald-400" />

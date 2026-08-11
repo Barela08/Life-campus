@@ -19,7 +19,9 @@ import Unknowns from './pages/admin/Unknowns'
 import Analytics from './pages/admin/Analytics'
 import AdminNotifications from './pages/admin/Notifications'
 import Settings from './pages/admin/Settings'
-import AdminLayout from './components/AdminLayout'
+import LeaveManagement from './pages/admin/LeaveManagement'
+import RolesPermissions from './pages/admin/RolesPermissions'
+import StaffManagement from './pages/admin/StaffManagement'
 
 // Attendance terminal (teacher only)
 import Attendance from './pages/attendance/Attendance'
@@ -33,7 +35,7 @@ import TeacherLeave from './pages/teacher/TeacherLeave'
 import TeacherReports from './pages/teacher/TeacherReports'
 import TeacherNotifications from './pages/teacher/TeacherNotifications'
 import TeacherProfile from './pages/teacher/TeacherProfile'
-import TeacherLayout from './components/TeacherLayout'
+import StudentLeaveRequests from './pages/teacher/StudentLeaveRequests'
 
 // Student
 import StudentDashboard from './pages/student/StudentDashboard'
@@ -43,6 +45,10 @@ import StudentDownload from './pages/student/StudentDownload'
 import StudentNotifications from './pages/student/StudentNotifications'
 import StudentProfile from './pages/student/StudentProfile'
 import StudentLayout from './components/StudentLayout'
+import TeacherLayout from './components/TeacherLayout'
+import AdminLayout from './components/AdminLayout'
+import ApprovalRequests from './pages/ApprovalRequests'
+import LeavePage from './pages/LeavePage'
 
 function Protected({ role, children }: { role: 'admin' | 'teacher' | 'student'; children: React.ReactNode }) {
   const { user } = useAuth()
@@ -70,32 +76,37 @@ export default function App() {
       <Route path="/forgot-password" element={<ForgotPassword />} />
 
       {/* Admin Panel */}
-      <Route path="/admin" element={<Protected role="admin"><AdminLayout><AdminDashboard /></AdminLayout></Protected>} />
-      <Route path="/admin/attendance" element={<Protected role="admin"><AdminLayout><AdminAttendance /></AdminLayout></Protected>} />
-      <Route path="/admin/students" element={<Protected role="admin"><AdminLayout><Students /></AdminLayout></Protected>} />
-      <Route path="/admin/teachers" element={<Protected role="admin"><AdminLayout><Teachers /></AdminLayout></Protected>} />
-      <Route path="/admin/departments" element={<Protected role="admin"><AdminLayout><Departments /></AdminLayout></Protected>} />
-      <Route path="/admin/courses" element={<Protected role="admin"><AdminLayout><Courses /></AdminLayout></Protected>} />
-      <Route path="/admin/face" element={<Protected role="admin"><AdminLayout><AdminFace /></AdminLayout></Protected>} />
-      <Route path="/admin/reports" element={<Protected role="admin"><AdminLayout><Reports /></AdminLayout></Protected>} />
+      <Route path="/admin" element={<Protected role="admin"><AdminDashboard /></Protected>} />
+      <Route path="/admin/attendance" element={<Protected role="admin"><AdminAttendance /></Protected>} />
+      <Route path="/admin/students" element={<Protected role="admin"><Students /></Protected>} />
+      <Route path="/admin/teachers" element={<Protected role="admin"><Teachers /></Protected>} />
+      <Route path="/admin/departments" element={<Protected role="admin"><Departments /></Protected>} />
+      <Route path="/admin/courses" element={<Protected role="admin"><Courses /></Protected>} />
+      <Route path="/admin/face" element={<Protected role="admin"><AdminFace /></Protected>} />
+      <Route path="/admin/reports" element={<Protected role="admin"><Reports /></Protected>} />
 
-      <Route path="/admin/unknowns" element={<Protected role="admin"><AdminLayout><Unknowns /></AdminLayout></Protected>} />
-      <Route path="/admin/analytics" element={<Protected role="admin"><AdminLayout><Analytics /></AdminLayout></Protected>} />
-      <Route path="/admin/notifications" element={<Protected role="admin"><AdminLayout><AdminNotifications /></AdminLayout></Protected>} />
-      <Route path="/admin/settings" element={<Protected role="admin"><AdminLayout><Settings /></AdminLayout></Protected>} />
+      <Route path="/admin/unknowns" element={<Protected role="admin"><Unknowns /></Protected>} />
+      <Route path="/admin/analytics" element={<Protected role="admin"><Analytics /></Protected>} />
+      <Route path="/admin/notifications" element={<Protected role="admin"><AdminNotifications /></Protected>} />
+      <Route path="/admin/settings" element={<Protected role="admin"><Settings /></Protected>} />
+      <Route path="/admin/leave" element={<Protected role="admin"><LeaveManagement /></Protected>} />
+      <Route path="/admin/roles" element={<Protected role="admin"><RolesPermissions /></Protected>} />
+      <Route path="/admin/staff" element={<Protected role="admin"><StaffManagement /></Protected>} />
+      <Route path="/admin/requests" element={<Protected role="admin"><AdminLayout><ApprovalRequests mode="admin" /></AdminLayout></Protected>} />
 
       {/* Attendance terminal — teacher only */}
       <Route path="/attendance" element={<Protected role="teacher"><Attendance /></Protected>} />
 
       {/* Teacher Portal */}
-      <Route path="/teacher" element={<Protected role="teacher"><TeacherLayout><TeacherDashboard /></TeacherLayout></Protected>} />
-      <Route path="/teacher/classes" element={<Protected role="teacher"><TeacherLayout><TeacherClasses /></TeacherLayout></Protected>} />
-      <Route path="/teacher/history" element={<Protected role="teacher"><TeacherLayout><TeacherHistory /></TeacherLayout></Protected>} />
-      <Route path="/teacher/corrections" element={<Protected role="teacher"><TeacherLayout><TeacherCorrections /></TeacherLayout></Protected>} />
-      <Route path="/teacher/leave" element={<Protected role="teacher"><TeacherLayout><TeacherLeave /></TeacherLayout></Protected>} />
-      <Route path="/teacher/reports" element={<Protected role="teacher"><TeacherLayout><TeacherReports /></TeacherLayout></Protected>} />
-      <Route path="/teacher/notifications" element={<Protected role="teacher"><TeacherLayout><TeacherNotifications /></TeacherLayout></Protected>} />
-      <Route path="/teacher/profile" element={<Protected role="teacher"><TeacherLayout><TeacherProfile /></TeacherLayout></Protected>} />
+      <Route path="/teacher" element={<Protected role="teacher"><TeacherDashboard /></Protected>} />
+      <Route path="/teacher/classes" element={<Protected role="teacher"><TeacherClasses /></Protected>} />
+      <Route path="/teacher/history" element={<Protected role="teacher"><TeacherHistory /></Protected>} />
+      <Route path="/teacher/corrections" element={<Protected role="teacher"><TeacherCorrections /></Protected>} />
+      <Route path="/teacher/leave" element={<Protected role="teacher"><TeacherLeave /></Protected>} />
+      <Route path="/teacher/reports" element={<Protected role="teacher"><TeacherReports /></Protected>} />
+      <Route path="/teacher/notifications" element={<Protected role="teacher"><TeacherNotifications /></Protected>} />
+      <Route path="/teacher/profile" element={<Protected role="teacher"><TeacherProfile /></Protected>} />
+      <Route path="/teacher/requests" element={<Protected role="teacher"><StudentLeaveRequests /></Protected>} />
 
       {/* Student Portal */}
       <Route path="/student" element={<Protected role="student"><StudentLayout><StudentDashboard /></StudentLayout></Protected>} />
@@ -104,6 +115,8 @@ export default function App() {
       <Route path="/student/download" element={<Protected role="student"><StudentLayout><StudentDownload /></StudentLayout></Protected>} />
       <Route path="/student/notifications" element={<Protected role="student"><StudentLayout><StudentNotifications /></StudentLayout></Protected>} />
       <Route path="/student/profile" element={<Protected role="student"><StudentLayout><StudentProfile /></StudentLayout></Protected>} />
+      <Route path="/student/requests" element={<Protected role="student"><StudentLayout><ApprovalRequests mode="student" /></StudentLayout></Protected>} />
+      <Route path="/student/leave" element={<Protected role="student"><StudentLayout><LeavePage role="student" /></StudentLayout></Protected>} />
 
 {/* Default landing page = Attendance module */}
       <Route path="/" element={<RootLanding />} />

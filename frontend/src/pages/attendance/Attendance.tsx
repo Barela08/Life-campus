@@ -14,7 +14,7 @@ import {
 import { cameraService, CameraState } from '../../lib/camera'
 
 const OVERLAY_DURATION = 4500 // ms — 4–5 second show rule
-const SCAN_INTERVAL = 1200 // ms between recognition requests
+const SCAN_INTERVAL = 800 // ms between recognition requests; lock prevents overlap
 const UNKNOWN_COOLDOWN = 5000 // ms before the same unknown face re-triggers
 
 type OverlayKind = 'success' | 'duplicate' | 'unknown' | 'wrong_class' | null

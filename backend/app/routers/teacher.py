@@ -2,8 +2,31 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from ..database import get_db
 from .. import models, security, schemas
+from . import leave as leave_router
 
 router = APIRouter(prefix="/api/teacher", tags=["teacher"])
+
+
+@router.get("/profile")
+def teacher_profile(user: models.User = Depends(security.require_roles("teacher")),
+                    db: Session = Depends(get_db)):
+    teacher = db.query(models.Teacher).filter(models.Teacher.user_id == user.id).first()
+    if not teacher:
+        raise HTTPException(status_code=404, detail="Teacher profile not found")
+    return {
+        "id": teacher.id,
+        "teacher_id": teacher.teacher_id,
+        "full_name": teacher.full_name,
+        "email": teacher.email,
+        "phone": teacher.phone or "",
+        "department_id": teacher.department_id,
+        "subject_id": teacher.subject_id,
+        "class_id": teacher.class_id,
+        "section": teacher.section or "",
+        "department": teacher.department.name if teacher.department else "",
+        "subject": teacher.subject.name if teacher.subject else "",
+        "class_name": teacher.class_.name if teacher.class_ else "",
+    }
 
 
 @router.get("/notifications", response_model=list[schemas.NotificationOut])
@@ -91,6 +114,17 @@ def teacher_students(user: models.User = Depends(security.require_roles("teacher
     students = db.query(models.Student).filter(models.Student.department_id == teacher.department_id).all()
     return [{"id": s.id, "student_id": s.student_id, "full_name": s.full_name,
              "roll_number": s.roll_number, "email": s.email, "face_status": s.face_status} for s in students]
+
+
+@router.get("/student-leave-requests")
+def student_leave_requests(status: str | None = None, user: models.User = Depends(security.require_roles("teacher")), db: Session = Depends(get_db)):
+    teacher = db.query(models.Teacher).filter(models.Teacher.user_id == user.id).first()
+    if not teacher or not teacher.department_id or not teacher.class_id:
+        raise HTTPException(status_code=403, detail="Teacher assignment is not configured for student leave requests.")
+    rows = db.query(models.LeaveRequest).filter(models.LeaveRequest.applicant_role == "student").order_by(models.LeaveRequest.created_at.desc()).all()
+    visible = [row for row in rows if leave_router._can_review(row, user, db) and (not status or row.status == status)]
+    can_decide = security.has_permission(db, user, "leave.approve") and security.has_permission(db, user, "leave.reject")
+    return [{**leave_router._out(row, db), "can_review": can_decide} for row in visible]
 
 
 @router.get("/reports")

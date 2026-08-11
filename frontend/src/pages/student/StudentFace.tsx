@@ -1,6 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react'
 import api from '../../lib/api'
-import StudentLayout from '../../components/StudentLayout'
 import { PageHeader, Badge, Card } from '../../components/ui'
 import { useAuth } from '../../store/auth'
 import toast from 'react-hot-toast'
@@ -115,7 +114,7 @@ export default function StudentFace() {
     : cameraState.toUpperCase()
 
   return (
-    <StudentLayout>
+    <>
       <PageHeader title="Face Registration" subtitle="Register your face for automatic attendance" />
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <Card>
@@ -214,6 +213,6 @@ export default function StudentFace() {
           </div>
         </Card>
       </div>
-    </StudentLayout>
+    </>
   )
 }
