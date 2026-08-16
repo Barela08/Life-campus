@@ -6,10 +6,14 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from typing import Optional, Dict, Any, Tuple
 
+import logging
 from sqlalchemy.orm import Session
 
 from .config import settings
+from .database import SessionLocal
 from . import models
+
+logger = logging.getLogger("lifeos")
 
 
 # ============================================================
@@ -45,8 +49,8 @@ def _send(
     if not _setting("EMAIL_ENABLED", False):
         return False, "Email disabled (EMAIL_ENABLED=false)"
 
-    smtp_username = _setting("SMTP_USERNAME", "")
-    smtp_password = _setting("SMTP_PASSWORD", "")
+    smtp_username = _setting("SMTP_USERNAME", "").strip()
+    smtp_password = _setting("SMTP_PASSWORD", "").strip().replace(" ", "")
 
     if not smtp_username or not smtp_password:
         return False, (
@@ -55,7 +59,7 @@ def _send(
         )
 
     smtp_host = _setting("SMTP_HOST", "smtp.gmail.com")
-    smtp_port = int(_setting("SMTP_PORT", 587))
+    smtp_port = int(_setting("SMTP_PORT", 465))
     smtp_tls = bool(_setting("SMTP_USE_TLS", True))
 
     from_addr = (
@@ -72,7 +76,6 @@ def _send(
     last_error = ""
 
     for attempt in range(max(1, retries)):
-
         try:
             msg = MIMEMultipart("alternative")
 
@@ -92,35 +95,30 @@ def _send(
                 )
             )
 
-            with smtplib.SMTP(
-                smtp_host,
-                smtp_port,
-                timeout=15,
-            ) as server:
-
-                server.ehlo()
-
-                if smtp_tls:
-                    server.starttls()
-                    server.ehlo()
-
-                server.login(
-                    smtp_username,
-                    smtp_password,
-                )
-
-                server.sendmail(
-                    from_addr,
-                    [to_email],
-                    msg.as_string(),
-                )
+            # Use SSL directly for port 465 or try SSL fallback if TLS fails
+            if smtp_port == 465:
+                with smtplib.SMTP_SSL(smtp_host, 465, timeout=15) as server:
+                    server.login(smtp_username, smtp_password)
+                    server.sendmail(from_addr, [to_email], msg.as_string())
+            else:
+                try:
+                    with smtplib.SMTP(smtp_host, smtp_port, timeout=15) as server:
+                        server.ehlo()
+                        if smtp_tls:
+                            server.starttls()
+                            server.ehlo()
+                        server.login(smtp_username, smtp_password)
+                        server.sendmail(from_addr, [to_email], msg.as_string())
+                except Exception as exc:
+                    # Fallback to SSL on 465 if TLS 587 timed out or connection was forcibly closed
+                    with smtplib.SMTP_SSL(smtp_host, 465, timeout=15) as server:
+                        server.login(smtp_username, smtp_password)
+                        server.sendmail(from_addr, [to_email], msg.as_string())
 
             return True, ""
 
         except Exception as exc:
-
             last_error = str(exc)
-
             if attempt < retries - 1:
                 time.sleep(1.0)
 
@@ -953,7 +951,7 @@ def send_attendance_marked(
 
     subject_line = (
         "Attendance Marked Successfully "
-        "– LifeOS Smart Campus"
+        "- LifeOS Smart Campus"
     )
 
     # --------------------------------------------------------
@@ -1311,3 +1309,119 @@ def send_leave_decision_email(db: Session, to_email: str, applicant_name: str, s
     ok, error = send_email(to_email, subject, body)
     log_email(db, to_email, subject, f"leave_{status}", "sent" if ok else "failed", error)
     return ok, error
+
+
+def queue_attendance_marked_email(attendance_id: int) -> dict:
+    """Report whether the attendance-marked email can be queued."""
+    if not _setting("EMAIL_ENABLED", False):
+        return {"queued": False, "status": "disabled", "message": "Attendance marked successfully. Email delivery is disabled."}
+    if not _setting("SMTP_USERNAME", "") or not _setting("SMTP_PASSWORD", ""):
+        return {"queued": False, "status": "not_configured", "message": "Attendance marked successfully. Email delivery is not configured."}
+    return {"queued": True, "status": "queued", "message": "Attendance marked successfully. Email delivery queued."}
+
+
+def send_attendance_marked_background(attendance_id: int) -> None:
+    """Send attendance email after the attendance transaction is already saved."""
+    db = SessionLocal()
+    try:
+        record = db.query(models.AttendanceRecord).get(attendance_id)
+        if not record:
+            logger.warning("Attendance email skipped: record %s not found", attendance_id)
+            return
+        student = db.query(models.Student).get(record.student_id)
+        if not student:
+            logger.warning("Attendance email skipped: student %s not found", record.student_id)
+            return
+
+        recipients = []
+        if getattr(student, "email", None):
+            recipients.append(student.email)
+        if getattr(student, "parent_email", None) and student.parent_email not in recipients:
+            recipients.append(student.parent_email)
+        if not recipients:
+            logger.info("Attendance email skipped for record %s: no recipient email", attendance_id)
+            return
+
+        now = datetime.now()
+        overall_pct = 0.0
+        monthly_pct = 0.0
+        try:
+            from . import attendance_service
+            overall_pct = attendance_service.compute_student_percentage(db, student.id)
+            monthly_pct = attendance_service.monthly_percentage(db, student.id, now.month, now.year)
+        except Exception as exc:
+            logger.warning("Attendance percentage calculation failed for email record %s: %s", attendance_id, exc.__class__.__name__)
+
+        dept = student.department.name if student.department else ""
+        course = student.course.name if student.course else ""
+        semester = student.semester.name if student.semester else ""
+        session = record.session
+        cls = record.class_name or (session.class_.name if session and session.class_ else "")
+        section = session.section if session else ""
+        subject_name = record.subject or (session.subject.name if session and session.subject else "")
+        teacher_name = record.teacher or (session.teacher.full_name if session and session.teacher else "")
+
+        for to_email in recipients:
+            ok, error = send_attendance_marked(
+                db,
+                to_email,
+                student.full_name,
+                student.roll_number or student.student_id,
+                dept,
+                course,
+                semester,
+                cls,
+                section,
+                subject_name,
+                teacher_name,
+                str(record.date),
+                record.time,
+                record.confidence or 0.0,
+                overall_pct,
+                monthly_pct,
+                student_id=student.id,
+                attendance_id=record.id,
+            )
+            if not ok:
+                safe_error = (error or "SMTP delivery failed")[:500]
+                logger.warning(
+                    "Attendance email failed for record %s via SMTP host=%s port=%s sender=%s error=%s",
+                    attendance_id,
+                    _setting("SMTP_HOST", ""),
+                    _setting("SMTP_PORT", ""),
+                    _setting("SMTP_FROM_EMAIL", "") or _setting("SMTP_USERNAME", ""),
+                    safe_error,
+                )
+                db.add(models.EmailDeliveryFailureLog(
+                    to_email=to_email,
+                    subject="Attendance Marked Successfully - LifeOS Smart Campus",
+                    body_type="attendance_marked",
+                    error=safe_error,
+                    attendance_record_id=record.id,
+                ))
+                db.commit()
+        if overall_pct < 75.0:
+            for to_email in recipients:
+                ok, error = send_low_attendance(db, to_email, student.full_name, overall_pct)
+                if not ok:
+                    safe_error = (error or "SMTP delivery failed")[:500]
+                    logger.warning(
+                        "Low-attendance email failed for record %s via SMTP host=%s port=%s sender=%s error=%s",
+                        attendance_id,
+                        _setting("SMTP_HOST", ""),
+                        _setting("SMTP_PORT", ""),
+                        _setting("SMTP_FROM_EMAIL", "") or _setting("SMTP_USERNAME", ""),
+                        safe_error,
+                    )
+                    db.add(models.EmailDeliveryFailureLog(
+                        to_email=to_email,
+                        subject=f"Low Attendance Alert - {student.full_name}",
+                        body_type="low_attendance",
+                        error=safe_error,
+                        attendance_record_id=record.id,
+                    ))
+                    db.commit()
+    except Exception as exc:
+        logger.warning("Attendance email background task failed for record %s: %s", attendance_id, str(exc)[:500])
+    finally:
+        db.close()

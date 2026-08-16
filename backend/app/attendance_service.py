@@ -1,4 +1,5 @@
 from datetime import date, datetime, timedelta
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from sqlalchemy import func, and_, extract
 from . import models
@@ -55,16 +56,33 @@ def mark_present(db: Session, session: models.AttendanceSession, student: models
         method=method,
     )
     db.add(record)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        existing = db.query(models.AttendanceRecord).filter(
+            models.AttendanceRecord.session_id == session.id,
+            models.AttendanceRecord.student_id == student.id,
+        ).first()
+        if existing:
+            setattr(existing, "_created_now", False)
+            return existing
+        raise
     db.refresh(record)
+    setattr(record, "_created_now", True)
     return record
 
 
 def bulk_mark_absent(db: Session, session: models.AttendanceSession, exclude_student_ids: list):
     """After session end, mark enrolled students not present as absent."""
-    enrolled = db.query(models.Student).filter(models.Student.class_id == session.class_id).all()
+    enrolled = db.query(models.Student).filter(
+        models.Student.department_id == session.department_id,
+        models.Student.class_id == session.class_id,
+    )
+    if session.section:
+        enrolled = enrolled.filter(models.Student.section == session.section)
     now = datetime.now()
-    for s in enrolled:
+    for s in enrolled.all():
         if s.id in exclude_student_ids:
             continue
         if is_duplicate(db, session.id, s.id):

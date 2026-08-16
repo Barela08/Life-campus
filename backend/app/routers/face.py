@@ -2,7 +2,7 @@ import base64
 import threading
 import time
 from datetime import datetime
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from sqlalchemy.orm import Session
 
 from ..database import get_db
@@ -24,7 +24,7 @@ def _invalidate_embedding_cache() -> None:
 
 def _known_embeddings(db: Session, session: models.AttendanceSession) -> list[dict]:
     """Load and decrypt a class cohort once, not on every camera frame."""
-    key = (session.department_id, session.class_id, session.section or "")
+    key = (session.department_id, session.class_id, session.section or "", session.subject_id or 0)
     now = time.monotonic()
     with _embedding_cache_lock:
         cached = _embedding_cache.get(key)
@@ -38,10 +38,32 @@ def _known_embeddings(db: Session, session: models.AttendanceSession) -> list[di
     )
     if session.section:
         query = query.filter(models.Student.section == session.section)
-    embeddings = [
-        {"student_id": row.student_id, "embedding": face_service.decrypt_embedding(row.embedding)}
-        for row in query.all()
-    ]
+    embeddings = []
+    for row in query.all():
+        if not row.student:
+            continue
+        if row.student.user and not row.student.user.is_active:
+            continue
+        try:
+            embedding = face_service.decrypt_embedding(row.embedding)
+        except Exception:
+            db.add(models.AuditLog(
+                user_id=None,
+                action="face_embedding_skipped",
+                detail=f"Corrupted face embedding skipped for student_id={row.student_id}",
+            ))
+            continue
+        if not embedding:
+            continue
+        embeddings.append({
+            "student_id": row.student_id,
+            "student_db_id": row.student.id,
+            "student_code": row.student.student_id,
+            "student_name": row.student.full_name,
+            "roll_number": row.student.roll_number,
+            "section": row.student.section,
+            "embedding": embedding,
+        })
     with _embedding_cache_lock:
         _embedding_cache[key] = (now, embeddings)
     return embeddings
@@ -56,6 +78,39 @@ def get_config_threshold(db: Session) -> float:
         except (TypeError, ValueError):
             pass
     return settings.FACE_MATCH_THRESHOLD
+
+
+def _record_payload(record: models.AttendanceRecord, session: models.AttendanceSession, student: models.Student) -> dict:
+    return {
+        "id": record.id,
+        "student_id": student.student_id,
+        "student_db_id": student.id,
+        "student_name": student.full_name,
+        "profile_photo": student.profile_photo or "",
+        "status": record.status,
+        "date": str(record.date),
+        "time": record.time,
+        "confidence": round(record.confidence or 0.0, 3),
+        "subject": record.subject or (session.subject.name if session.subject else ""),
+        "class_name": record.class_name or (session.class_.name if session.class_ else ""),
+        "section": session.section or "",
+    }
+
+
+def _session_counts(db: Session, session_id: int) -> dict:
+    session = db.query(models.AttendanceSession).get(session_id)
+    if not session:
+        return {"marked": 0, "present": 0, "absent": 0, "total_students": 0}
+    records = db.query(models.AttendanceRecord).filter(models.AttendanceRecord.session_id == session_id).all()
+    present = len([r for r in records if r.status == "present"])
+    students = db.query(models.Student).filter(
+        models.Student.department_id == session.department_id,
+        models.Student.class_id == session.class_id,
+    )
+    if session.section:
+        students = students.filter(models.Student.section == session.section)
+    total = students.count()
+    return {"marked": len(records), "present": present, "absent": max(total - present, 0), "total_students": total}
 
 
 def _validate_registration_image(db: Session, image_b64: str) -> dict:
@@ -229,6 +284,187 @@ def reset_face(student_id: int,
 
 
 @router.post("/match")
+def match_face_fast(req: schemas.FaceMatchRequest,
+                    background_tasks: BackgroundTasks,
+                    user: models.User = Depends(security.get_current_user),
+                    db: Session = Depends(get_db)):
+    """Optimized attendance recognition path: one frame analysis, cached cohort embeddings, queued email."""
+    session = db.query(models.AttendanceSession).get(req.session_id)
+    if not session or session.status != "active":
+        raise HTTPException(status_code=400, detail="No active attendance session")
+    if user.role not in {"teacher", "admin"}:
+        raise HTTPException(status_code=403, detail="Only the session teacher may process attendance")
+    if user.role == "teacher" and (not session.teacher or session.teacher.user_id != user.id):
+        raise HTTPException(status_code=403, detail="You may only process attendance for your own session")
+    if not req.image_b64 or len(req.image_b64) < 100:
+        raise HTTPException(status_code=400, detail="Camera frame is not ready. Please wait.")
+
+    threshold = get_config_threshold(db)
+    analysis = face_service._cached_attendance_analysis(req.image_b64)
+    if not analysis.get("passed"):
+        reason = analysis.get("reason", "Face image validation failed.")
+        db.add(models.AuditLog(user_id=user.id, action="attendance_failure", detail=f"Frame rejected: {reason}"))
+        db.commit()
+        return {
+            "success": False,
+            "matched": False,
+            "reason": reason,
+            "confidence": 0.0,
+            "liveness": analysis.get("liveness"),
+        }
+
+    known_list = _known_embeddings(db, session)
+    if not known_list:
+        db.add(models.AuditLog(user_id=user.id, action="attendance_failure",
+                               detail="No registered faces for selected class/section"))
+        db.commit()
+        return {"success": False, "matched": False, "reason": "No registered faces for selected class/section", "confidence": 0.0}
+
+    _, score, best = face_service.match_embedding(
+        analysis.get("embedding"),
+        int(analysis.get("face_count", 0)),
+        known_list,
+        threshold,
+    )
+    if not best:
+        dept_name = session.department.name if session.department else ""
+        cls_name = session.class_.name if session.class_ else ""
+        crs_name = session.class_.course.name if (session.class_ and session.class_.course) else ""
+        sem_name = session.class_.semester.name if (session.class_ and session.class_.semester) else ""
+        subj_name = session.subject.name if session.subject else ""
+        tchr_name = session.teacher.full_name if session.teacher else ""
+        reason = "Face not recognized." if score else "Unknown face."
+        snapshot = face_service.save_snapshot(req.image_b64, "unknowns")
+        db.add(models.UnknownFaceLog(
+            snapshot_path=snapshot,
+            confidence=round(score, 3),
+            camera_id=req.camera_id,
+            session_id=session.id,
+            department_name=dept_name,
+            course_name=crs_name,
+            semester_name=sem_name,
+            class_name=cls_name,
+            subject_name=subj_name,
+            teacher_name=tchr_name,
+            reason=reason if not score else f"Low similarity ({round(score, 3)} < {threshold})",
+            status="Low Confidence" if score else "Unrecognized",
+        ))
+        db.add(models.AuditLog(user_id=user.id, action="unknown_face", detail=reason))
+        db.commit()
+        return {
+            "success": False,
+            "matched": False,
+            "reason": reason,
+            "confidence": round(score, 3),
+            "threshold": threshold,
+            "liveness": analysis.get("liveness"),
+        }
+
+    student = db.query(models.Student).get(best["student_id"])
+    if not student or student.face_status != "approved":
+        return {"success": False, "matched": False, "reason": "Student face not approved", "confidence": round(score, 3)}
+    if student.user and not student.user.is_active:
+        return {"success": False, "matched": False, "reason": "Student account is inactive", "confidence": round(score, 3)}
+    if session.teacher and session.teacher.subject_id and session.subject_id != session.teacher.subject_id:
+        return {"success": False, "matched": False, "reason": "Session subject is not assigned to this teacher", "confidence": round(score, 3)}
+    if student.department_id != session.department_id or student.class_id != session.class_id or (session.section and student.section != session.section):
+        return {
+            "success": False,
+            "matched": True,
+            "wrong_class": True,
+            "student": student.full_name,
+            "student_id": student.student_id,
+            "message": "Student belongs to another class/section.",
+            "confidence": round(score, 3),
+        }
+
+    existing = db.query(models.AttendanceRecord).filter(
+        models.AttendanceRecord.session_id == session.id,
+        models.AttendanceRecord.student_id == student.id,
+    ).first()
+    if existing:
+        payload = _record_payload(existing, session, student)
+        return {
+            "success": True,
+            "matched": True,
+            "already_marked": True,
+            "duplicate": True,
+            "student": student.full_name,
+            "student_id": student.student_id,
+            "full_name": student.full_name,
+            "roll_number": student.roll_number,
+            "message": "Attendance already marked.",
+            "attendance": payload,
+            "record": payload,
+            "counts": _session_counts(db, session.id),
+            "confidence": round(score, 3),
+            "threshold": threshold,
+            "email": {"queued": False, "status": "skipped", "message": "Attendance already marked."},
+        }
+
+    record = attendance_service.mark_present(db, session, student, score, req.camera_id)
+    if not getattr(record, "_created_now", True):
+        payload = _record_payload(record, session, student)
+        return {
+            "success": True,
+            "matched": True,
+            "already_marked": True,
+            "duplicate": True,
+            "student": student.full_name,
+            "student_id": student.student_id,
+            "full_name": student.full_name,
+            "roll_number": student.roll_number,
+            "message": "Attendance already marked.",
+            "attendance": payload,
+            "record": payload,
+            "counts": _session_counts(db, session.id),
+            "confidence": round(score, 3),
+            "threshold": threshold,
+            "email": {"queued": False, "status": "skipped", "message": "Attendance already marked."},
+        }
+    email_status = email_service.queue_attendance_marked_email(record.id)
+    if email_status.get("queued"):
+        background_tasks.add_task(email_service.send_attendance_marked_background, record.id)
+
+    if student.user_id:
+        db.add(models.Notification(user_id=student.user_id, title="Attendance Marked",
+                                   message=f"Present for {session.subject.name if session.subject else 'class'}",
+                                   type="success"))
+    db.add(models.AuditLog(user_id=user.id, action="attendance_success",
+                           detail=f"{student.full_name} marked present for {session.subject.name if session.subject else 'class'}"))
+    db.commit()
+
+    now = datetime.now()
+    payload = _record_payload(record, session, student)
+    return {
+        "success": True,
+        "matched": True,
+        "already_marked": False,
+        "duplicate": False,
+        "student": student.full_name,
+        "student_id": student.student_id,
+        "full_name": student.full_name,
+        "roll_number": student.roll_number,
+        "department": student.department.name if student.department else "",
+        "class": payload["class_name"],
+        "section": payload["section"],
+        "teacher": session.teacher.full_name if session.teacher else "",
+        "date": now.strftime("%Y-%m-%d"),
+        "time": payload["time"],
+        "confidence": round(score, 3),
+        "threshold": threshold,
+        "status": record.status,
+        "liveness": analysis.get("liveness"),
+        "student_info": {"id": student.id, "name": student.full_name, "student_id": student.student_id},
+        "attendance": payload,
+        "record": payload,
+        "counts": _session_counts(db, session.id),
+        "email": email_status,
+        "message": email_status.get("message") or "Attendance marked successfully.",
+    }
+
+
+@router.post("/match-legacy")
 def match_face(req: schemas.FaceMatchRequest,
                user: models.User = Depends(security.get_current_user),
                db: Session = Depends(get_db)):
@@ -320,6 +556,10 @@ def match_face(req: schemas.FaceMatchRequest,
     student = db.query(models.Student).get(best["student_id"])
     if not student or student.face_status != "approved":
         return {"matched": False, "reason": "Student face not approved", "confidence": round(score, 3), "liveness": liveness}
+    if student.user and not student.user.is_active:
+        return {"matched": False, "reason": "Student account is inactive", "confidence": round(score, 3), "liveness": liveness}
+    if session.teacher and session.teacher.subject_id and session.subject_id != session.teacher.subject_id:
+        return {"matched": False, "reason": "Session subject is not assigned to this teacher", "confidence": round(score, 3), "liveness": liveness}
 
     # Verify student belongs to the active attendance class/section
     if student.department_id != session.department_id or student.class_id != session.class_id:

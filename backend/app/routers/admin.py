@@ -430,6 +430,8 @@ def update_student(student_id: int, req: schemas.StudentUpdate, db: Session = De
             s.user.must_change_password = True
     _commit_or_400(db, "Student update failed")
     db.refresh(s)
+    if s.email:
+        email_service.send_profile_updated(db, s.email, s.full_name, "student", list(data.keys()))
     return s
 
 
@@ -553,6 +555,8 @@ def update_teacher(teacher_id: int, req: schemas.TeacherUpdate, db: Session = De
             t.user.hashed_password = security.hash_password(password)
     _commit_or_400(db, "Teacher update failed")
     db.refresh(t)
+    if t.email:
+        email_service.send_profile_updated(db, t.email, t.full_name, "teacher", list(data.keys()))
     return t
 
 

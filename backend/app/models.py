@@ -1,5 +1,5 @@
 from datetime import datetime, date
-from sqlalchemy import Column, Integer, String, Float, Boolean, DateTime, Date, ForeignKey, Text, Table, JSON
+from sqlalchemy import Column, Integer, String, Float, Boolean, DateTime, Date, ForeignKey, Text, Table, JSON, UniqueConstraint
 from sqlalchemy.orm import relationship
 from .database import Base
 
@@ -164,6 +164,9 @@ class AttendanceSession(Base):
 
 class AttendanceRecord(Base):
     __tablename__ = "attendance_records"
+    __table_args__ = (
+        UniqueConstraint("session_id", "student_id", name="uq_attendance_session_student"),
+    )
     id = Column(Integer, primary_key=True, index=True)
     session_id = Column(Integer, ForeignKey("attendance_sessions.id"), index=True)
     student_id = Column(Integer, ForeignKey("students.id"), index=True)

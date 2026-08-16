@@ -1,5 +1,5 @@
-import React, { createContext, useContext, useState } from 'react'
-import api from '../lib/api'
+import React, { createContext, useContext, useState, useEffect } from 'react'
+import api, { registerLogoutCallback } from '../lib/api'
 
 interface User {
   id: number
@@ -54,7 +54,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       return null
     }
   })
-  const [token] = useState<string | null>(() => localStorage.getItem('lifeos_token'))
+  const [token, setTokenState] = useState<string | null>(() => localStorage.getItem('lifeos_token'))
+
+  useEffect(() => {
+    registerLogoutCallback(() => {
+      setUser(null)
+      setTokenState(null)
+    })
+  }, [])
 
   const login = async (username: string, password: string) => {
     const res = await api.post('/auth/login', { username, password })
@@ -71,6 +78,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
     localStorage.setItem('lifeos_user', JSON.stringify(u))
     setUser(u)
+    setTokenState(data.access_token)
     // Refresh to get role-specific data (student/teacher details)
     setTimeout(() => refreshUser(), 0)
     return u
@@ -81,6 +89,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     localStorage.removeItem('lifeos_refresh')
     localStorage.removeItem('lifeos_user')
     setUser(null)
+    setTokenState(null)
   }
 
   const changePassword = async (oldP: string, newP: string) => {

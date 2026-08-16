@@ -463,6 +463,14 @@ const videoRef = useRef<HTMLVideoElement>(null)
             { duration: 2500 }
           )
         } else {
+          // Use the persisted record returned by the match API. The live
+          // panel must not wait for the next reconciliation request.
+          const attendance = d.attendance || d.record
+          if (attendance?.id) {
+            setRecords(current => current.some((item: any) => item.id === attendance.id)
+              ? current
+              : [attendance, ...current])
+          }
           showOverlay('success', rec)
           toast.success(
             <div className="flex items-center gap-3">
@@ -474,7 +482,6 @@ const videoRef = useRef<HTMLVideoElement>(null)
             </div>,
             { duration: 2500 }
           )
-          await loadRecords()
         }
       } else {
         // Unknown face — cooldown so it doesn't re-trigger every frame
@@ -522,7 +529,7 @@ const videoRef = useRef<HTMLVideoElement>(null)
 
   useEffect(() => { if (sessionId) loadRecords() }, [sessionId, loadRecords])
   useEffect(() => {
-    const i = setInterval(() => { if (sessionId) loadRecords() }, 3000)
+    const i = setInterval(() => { if (sessionId) loadRecords() }, 10000)
     return () => clearInterval(i)
   }, [sessionId, loadRecords])
 
@@ -1076,9 +1083,10 @@ const videoRef = useRef<HTMLVideoElement>(null)
                       <div className="min-w-0">
                         <p className="text-sm font-medium truncate">{r.student_name}</p>
                         <p className="text-[11px] text-gray-400 truncate">
-                          {r.time}
+                          {r.student_id ? `ID: ${r.student_id} | ` : ''}{r.time}
                           {r.class_name ? ` • ${r.class_name}` : ''}
                         </p>
+                        {r.subject && <p className="text-[11px] text-gray-400 truncate">{r.subject}</p>}
                       </div>
                     </div>
                     <div className="text-right shrink-0 ml-2">

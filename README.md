@@ -80,7 +80,7 @@ http://localhost:5173/admin
 │        TEACHER LOGIN            │
 ├─────────────────────────────────┤
 │ Username : TCH001               │
-│ Password : 1234                 │
+│ Password : 123456               │
 │ URL      : /teacher             │
 └─────────────────────────────────┘
 ```
@@ -94,7 +94,7 @@ http://localhost:5173/teacher
 ### ✅ Verified Development Credential
 
 ```text
-TCH001 / 1234
+TCH001 / 123456
 ```
 
 This credential was verified against the local development API.

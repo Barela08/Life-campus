@@ -334,6 +334,10 @@ class AttendanceRecordUpdate(BaseModel):
     status: str
 
 
+class BulkAttendanceDeleteRequest(BaseModel):
+    record_ids: list[int]
+
+
 class FaceMatchRequest(BaseModel):
     session_id: int
     image_b64: str

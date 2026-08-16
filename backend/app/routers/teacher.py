@@ -111,7 +111,14 @@ def teacher_students(user: models.User = Depends(security.require_roles("teacher
     teacher = db.query(models.Teacher).filter(models.Teacher.user_id == user.id).first()
     if not teacher:
         raise HTTPException(status_code=404, detail="Teacher profile not found")
-    students = db.query(models.Student).filter(models.Student.department_id == teacher.department_id).all()
+    query = db.query(models.Student)
+    if teacher.department_id:
+        query = query.filter(models.Student.department_id == teacher.department_id)
+    if teacher.class_id:
+        query = query.filter(models.Student.class_id == teacher.class_id)
+    if teacher.section:
+        query = query.filter(models.Student.section == teacher.section)
+    students = query.all()
     return [{"id": s.id, "student_id": s.student_id, "full_name": s.full_name,
              "roll_number": s.roll_number, "email": s.email, "face_status": s.face_status} for s in students]
 

@@ -113,7 +113,7 @@ def _detect_faces(
     engine = _ensure_engine()
     import logging
     logger = logging.getLogger("lifeos.face")
-    logger.info(f"_detect_faces: engine={engine}, image_shape={image.shape}, dtype={image.dtype}")
+    logger.debug("_detect_faces: engine=%s image_shape=%s dtype=%s", engine, image.shape, image.dtype)
 
     if engine == "insightface":
 
@@ -122,15 +122,15 @@ def _detect_faces(
             return []
 
         bgr = np.ascontiguousarray(image[:, :, ::-1])
-        logger.info(f"_detect_faces: converted to BGR, shape={bgr.shape}")
+        logger.debug("_detect_faces: converted to BGR shape=%s", bgr.shape)
         faces = _face_app.get(bgr)
-        logger.info(f"_detect_faces: insightface found {len(faces)} faces")
+        logger.debug("_detect_faces: insightface found %s faces", len(faces))
         return faces
 
     if engine == "face_recognition":
         import face_recognition
         faces = face_recognition.face_locations(image)
-        logger.info(f"_detect_faces: face_recognition found {len(faces)} faces")
+        logger.debug("_detect_faces: face_recognition found %s faces", len(faces))
         return faces
 
     return []

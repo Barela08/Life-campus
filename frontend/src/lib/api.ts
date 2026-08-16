@@ -13,12 +13,25 @@ api.interceptors.request.use((config) => {
   return config
 })
 
+let logoutCallback: (() => void) | null = null
+
+export function registerLogoutCallback(cb: () => void) {
+  logoutCallback = cb
+}
+
 api.interceptors.response.use(
   (res) => res,
   (err) => {
     if (err.response?.status === 401) {
       localStorage.removeItem('lifeos_token')
       localStorage.removeItem('lifeos_user')
+      if (logoutCallback) {
+        try {
+          logoutCallback()
+        } catch (e) {
+          console.error(e)
+        }
+      }
       // Don't redirect when on the attendance terminal — it has its own login popup
       const isAttendance = window.location.pathname === '/' || window.location.pathname === '/attendance'
       if (!window.location.pathname.includes('/login') && !isAttendance) {

@@ -48,6 +48,15 @@ def ensure_schema_updates():
             if "phone" not in user_columns:
                 with engine.begin() as conn:
                     conn.execute(text("ALTER TABLE users ADD COLUMN phone VARCHAR DEFAULT ''"))
+        if "teachers" in inspector.get_table_names():
+            teacher_columns = {col["name"] for col in inspector.get_columns("teachers")}
+            with engine.begin() as conn:
+                if "subject_id" not in teacher_columns:
+                    conn.execute(text("ALTER TABLE teachers ADD COLUMN subject_id INTEGER"))
+                if "class_id" not in teacher_columns:
+                    conn.execute(text("ALTER TABLE teachers ADD COLUMN class_id INTEGER"))
+                if "section" not in teacher_columns:
+                    conn.execute(text("ALTER TABLE teachers ADD COLUMN section VARCHAR DEFAULT ''"))
         if "email_logs" in inspector.get_table_names():
             existing = {col["name"] for col in inspector.get_columns("email_logs")}
             desired = {
@@ -136,6 +145,36 @@ def ensure_schema_updates():
                     if column in existing:
                         continue
                     conn.execute(text(f"ALTER TABLE unknown_face_logs ADD COLUMN {column} {ddl}"))
+        if "attendance_records" in inspector.get_table_names():
+            indexes = {idx["name"] for idx in inspector.get_indexes("attendance_records")}
+            constraint_name = "uq_attendance_session_student"
+            duplicate_sql = """
+                SELECT session_id, student_id, COUNT(*) AS count
+                FROM attendance_records
+                GROUP BY session_id, student_id
+                HAVING COUNT(*) > 1
+                LIMIT 1
+            """
+            with engine.begin() as conn:
+                duplicate = conn.execute(text(duplicate_sql)).first()
+                if duplicate:
+                    logger.warning(
+                        "Skipping %s because duplicate attendance rows already exist for session_id=%s student_id=%s",
+                        constraint_name,
+                        duplicate[0],
+                        duplicate[1],
+                    )
+                elif constraint_name not in indexes:
+                    if engine.dialect.name == "postgresql":
+                        conn.execute(text(
+                            "CREATE UNIQUE INDEX IF NOT EXISTS uq_attendance_session_student "
+                            "ON attendance_records (session_id, student_id)"
+                        ))
+                    else:
+                        conn.execute(text(
+                            "CREATE UNIQUE INDEX IF NOT EXISTS uq_attendance_session_student "
+                            "ON attendance_records (session_id, student_id)"
+                        ))
     except Exception as e:
         print(f"Skipping schema updates due to DB error: {e}")
 
