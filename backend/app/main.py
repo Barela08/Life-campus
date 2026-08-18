@@ -208,6 +208,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+@app.middleware("http")
+async def auto_api_prefix_middleware(request: Request, call_next):
+    path = request.scope.get("path", "")
+    if path and not path.startswith(("/api", "/docs", "/openapi", "/uploads", "/redoc")):
+        request.scope["path"] = "/api" + path
+    return await call_next(request)
+
 # Serve uploads statically
 app.mount("/uploads", StaticFiles(directory=str(settings.UPLOAD_DIR)), name="uploads")
 
