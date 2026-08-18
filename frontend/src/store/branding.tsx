@@ -15,6 +15,12 @@ const Ctx = createContext<BrandingCtx>({
   refreshBranding: async () => {},
 })
 
+function formatLogoUrl(url: string) {
+  if (!url) return ''
+  if (url.startsWith('data:') || url.startsWith('http')) return url
+  return `https://life-campus.onrender.com${url.startsWith('/') ? '' : '/'}${url}`
+}
+
 export const BrandingProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [systemName, setSystemName] = useState('LifeOS Smart Campus')
   const [systemLogo, setSystemLogo] = useState('')
@@ -28,7 +34,7 @@ export const BrandingProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         document.title = res.data.system_name
       }
       if (res.data.system_logo !== undefined) {
-        setSystemLogo(res.data.system_logo || '')
+        setSystemLogo(formatLogoUrl(res.data.system_logo || ''))
       }
       if (res.data.maintenance_mode !== undefined) {
         const isMaint = String(res.data.maintenance_mode).toLowerCase() === 'true' || String(res.data.maintenance_mode) === '1'

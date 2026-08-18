@@ -53,7 +53,11 @@ def _name(db: Session, model, row_id):
     if not row_id:
         return "-"
     row = db.get(model, row_id)
-    return row.name if row else "-"
+    if row and getattr(row, "name", None):
+        return row.name
+    if model.__name__ == "Semester":
+        return f"Semester {row_id}"
+    return "-"
 
 
 def _optional_int(value):
@@ -220,12 +224,20 @@ def update_department(dept_id: int, req: schemas.DepartmentUpdate, db: Session =
     return d
 
 
+import re
+
+def _slug_code(name: str) -> str:
+    cleaned = re.sub(r'[^A-Za-z0-9]+', '-', name or "").strip('-').upper()
+    return cleaned or f"ITEM-{int(datetime.utcnow().timestamp()) % 10000}"
+
+
 # ---------- Courses ----------
 @router.post("/courses", response_model=schemas.CourseOut)
 def create_course(req: schemas.CourseCreate, db: Session = Depends(get_db), _=admin_only):
-    if db.query(models.Course).filter(models.Course.code == req.code).first():
-        raise HTTPException(status_code=400, detail="Course code already exists")
-    c = models.Course(name=req.name, code=req.code, duration=req.duration, department_id=req.department_id)
+    code = req.code.strip() if req.code and req.code.strip() else _slug_code(req.name)
+    if db.query(models.Course).filter(models.Course.code == code).first():
+        code = f"{code}-{int(datetime.utcnow().timestamp()) % 10000}"
+    c = models.Course(name=req.name, code=code, duration=req.duration, department_id=req.department_id)
     db.add(c); db.commit(); db.refresh(c)
     return c
 
@@ -258,7 +270,8 @@ def update_course(course_id: int, req: schemas.CourseUpdate, db: Session = Depen
 # ---------- Semesters ----------
 @router.post("/semesters", response_model=schemas.SemesterOut)
 def create_semester(req: schemas.SemesterCreate, db: Session = Depends(get_db), _=admin_only):
-    s = models.Semester(name=req.name, code=req.code, order=req.order)
+    code = req.code.strip() if req.code and req.code.strip() else _slug_code(req.name)
+    s = models.Semester(name=req.name, code=code, order=req.order)
     db.add(s); db.commit(); db.refresh(s)
     return s
 
@@ -291,7 +304,10 @@ def update_semester(sem_id: int, req: schemas.SemesterUpdate, db: Session = Depe
 # ---------- Classes ----------
 @router.post("/classes", response_model=schemas.ClassOut)
 def create_class(req: schemas.ClassCreate, db: Session = Depends(get_db), _=admin_only):
-    c = models.Class(name=req.name, code=req.code, course_id=req.course_id, semester_id=req.semester_id)
+    code = req.code.strip() if req.code and req.code.strip() else _slug_code(req.name)
+    if db.query(models.Class).filter(models.Class.code == code).first():
+        code = f"{code}-{int(datetime.utcnow().timestamp()) % 10000}"
+    c = models.Class(name=req.name, code=code, course_id=req.course_id, semester_id=req.semester_id, section=req.section or "")
     db.add(c); db.commit(); db.refresh(c)
     return c
 
@@ -324,9 +340,10 @@ def update_class(class_id: int, req: schemas.ClassUpdate, db: Session = Depends(
 # ---------- Subjects ----------
 @router.post("/subjects", response_model=schemas.SubjectOut)
 def create_subject(req: schemas.SubjectCreate, db: Session = Depends(get_db), _=admin_only):
-    if db.query(models.Subject).filter(models.Subject.code == req.code).first():
-        raise HTTPException(status_code=400, detail="Subject code already exists")
-    s = models.Subject(name=req.name, code=req.code, department_id=req.department_id)
+    code = req.code.strip() if req.code and req.code.strip() else _slug_code(req.name)
+    if db.query(models.Subject).filter(models.Subject.code == code).first():
+        code = f"{code}-{int(datetime.utcnow().timestamp()) % 10000}"
+    s = models.Subject(name=req.name, code=code, department_id=req.department_id)
     db.add(s); db.commit(); db.refresh(s)
     return s
 
@@ -720,6 +737,23 @@ def list_unknowns(db: Session = Depends(get_db), _=admin_only):
     } for l in logs]
 
 
+@router.delete("/unknowns")
+def clear_all_unknowns(db: Session = Depends(get_db), _=admin_only):
+    db.query(models.UnknownFaceLog).delete()
+    db.commit()
+    return {"message": "All unknown face logs cleared"}
+
+
+@router.delete("/unknowns/{log_id}")
+def delete_unknown(log_id: int, db: Session = Depends(get_db), _=admin_only):
+    log = db.query(models.UnknownFaceLog).get(log_id)
+    if not log:
+        raise HTTPException(status_code=404, detail="Unknown face log not found")
+    db.delete(log)
+    db.commit()
+    return {"message": "Unknown face log deleted"}
+
+
 # ---------- Audit logs ----------
 @router.get("/audit-logs")
 def list_audit(db: Session = Depends(get_db), _=admin_only):
@@ -793,12 +827,17 @@ def upload_system_logo(file: UploadFile = File(...), db: Session = Depends(get_d
     with open(target_path, "wb") as f:
         f.write(content)
         
-    logo_url = f"/uploads/branding/{filename}"
+    import base64
+    mime_map = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".svg": "image/svg+xml", ".webp": "image/webp"}
+    mime = mime_map.get(ext, "image/png")
+    b64_str = base64.b64encode(content).decode("utf-8")
+    logo_url = f"data:{mime};base64,{b64_str}"
+
     row = db.query(models.SystemConfig).filter(models.SystemConfig.key == "system_logo").first()
     if row:
         row.value = logo_url
     else:
-        db.add(models.SystemConfig(key="system_logo", value=logo_url, description="System Logo Image Path"))
+        db.add(models.SystemConfig(key="system_logo", value=logo_url, description="System Logo Base64 Image"))
     db.commit()
     return {"message": "Logo uploaded successfully", "logo_url": logo_url}
 

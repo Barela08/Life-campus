@@ -50,11 +50,17 @@ export default function Settings() {
       .catch(() => {})
       .finally(() => setLoadingProfile(false))
 
+  function formatLogo(url: string) {
+    if (!url) return ''
+    if (url.startsWith('data:') || url.startsWith('http')) return url
+    return `https://life-campus.onrender.com${url.startsWith('/') ? '' : '/'}${url}`
+  }
+
     // Load admin settings
     api.get('/admin/settings')
       .then(res => {
         if (res.data.system_name) setSystemNameInput(res.data.system_name)
-        if (res.data.system_logo) setLogoPreview(res.data.system_logo)
+        if (res.data.system_logo) setLogoPreview(formatLogo(res.data.system_logo))
         if (res.data.maintenance_mode !== undefined) {
           setMaintMode(String(res.data.maintenance_mode).toLowerCase() === 'true' || String(res.data.maintenance_mode) === '1')
         }
@@ -85,7 +91,7 @@ export default function Settings() {
       const res = await api.post('/admin/settings/logo', formData, {
         headers: { 'Content-Type': 'multipart/form-data' }
       })
-      setLogoPreview(res.data.logo_url)
+      setLogoPreview(formatLogo(res.data.logo_url))
       toast.success('✓ Logo uploaded successfully')
       await refreshBranding()
     } catch (err: any) {
