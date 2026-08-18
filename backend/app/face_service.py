@@ -52,10 +52,10 @@ def _ensure_engine() -> str | None:
         if _engine_initialized:
             return _face_engine
         try:
-            from insightface.app import FaceAnalysis
-            _face_app = FaceAnalysis(name="buffalo_l", providers=["CPUExecutionProvider"])
-            # 480 keeps CPU detection responsive while retaining adequate facial detail.
-            _face_app.prepare(ctx_id=-1, det_size=(480, 480))
+            model_name = os.getenv("FACE_MODEL_NAME", "buffalo_sc")
+            _face_app = FaceAnalysis(name=model_name, providers=["CPUExecutionProvider"])
+            # (320, 320) keeps memory low (<180MB) and CPU detection fast on cloud free tiers.
+            _face_app.prepare(ctx_id=-1, det_size=(320, 320))
             _face_engine = "insightface"
         except Exception:
             try:
