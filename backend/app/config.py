@@ -18,8 +18,21 @@ class Settings:
     ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 8
     REFRESH_TOKEN_EXPIRE_DAYS = 7
 
-    # Database — supports SQLite (dev) or PostgreSQL/Supabase (production)
-    DATABASE_URL = os.getenv("DATABASE_URL", f"sqlite:///{BASE_DIR / 'data' / 'lifeos.db'}")
+    @property
+    def DATABASE_URL(self) -> str:
+        url = os.getenv("DATABASE_URL", f"sqlite:///{BASE_DIR / 'data' / 'lifeos.db'}")
+        if url.startswith("postgresql") and url.count("@") > 1:
+            try:
+                last_at = url.rfind("@")
+                creds = url[:last_at]
+                host_path = url[last_at:]
+                scheme_user, password = creds.rsplit(":", 1)
+                import urllib.parse
+                encoded_password = urllib.parse.quote(password, safe="")
+                return f"{scheme_user}:{encoded_password}{host_path}"
+            except Exception:
+                pass
+        return url
 
     # Supabase
     SUPABASE_URL = os.getenv("SUPABASE_URL", "")
