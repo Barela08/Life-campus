@@ -1,6 +1,11 @@
 import axios from 'axios'
 
-let rawBaseUrl = (import.meta.env.VITE_API_BASE_URL || '/api').trim()
+const DEFAULT_LIVE_BACKEND = 'https://life-campus.onrender.com/api'
+let envUrl = import.meta.env.VITE_API_BASE_URL
+let rawBaseUrl = (envUrl && envUrl.trim() !== '' && envUrl !== '/api') 
+  ? envUrl.trim() 
+  : DEFAULT_LIVE_BACKEND
+
 if (rawBaseUrl.startsWith('http') && !rawBaseUrl.endsWith('/api')) {
   rawBaseUrl = rawBaseUrl.replace(/\/+$/, '') + '/api'
 }
