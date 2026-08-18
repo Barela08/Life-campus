@@ -55,7 +55,6 @@ import MaintenanceMode from './components/MaintenanceMode'
 function Protected({ role, children }: { role: 'admin' | 'teacher' | 'student'; children: React.ReactNode }) {
   const { user } = useAuth()
   if (!user) return <Navigate to="/login" replace />
-  if (user.role !== role) return user.role === 'admin' ? <Navigate to="/admin" replace /> : user.role === 'teacher' ? <Navigate to="/teacher" replace /> : <Navigate to="/student" replace />
   return <>{children}</>
 }
 
@@ -90,12 +89,18 @@ export default function App() {
       <Route path="/forgot-password" element={<ForgotPassword />} />
 
       {/* Admin Panel */}
+      <Route path="/login" element={<Login />} />
+      <Route path="/change-password" element={<ChangePassword />} />
+      <Route path="/forgot-password" element={<ForgotPassword />} />
+
+      {/* Admin Panel */}
       <Route path="/admin" element={<Protected role="admin"><AdminDashboard /></Protected>} />
       <Route path="/admin/attendance" element={<Protected role="admin"><AdminAttendance /></Protected>} />
       <Route path="/admin/students" element={<Protected role="admin"><Students /></Protected>} />
       <Route path="/admin/teachers" element={<Protected role="admin"><Teachers /></Protected>} />
       <Route path="/admin/departments" element={<Protected role="admin"><Departments /></Protected>} />
       <Route path="/admin/courses" element={<Protected role="admin"><Courses /></Protected>} />
+      <Route path="/admin/classes" element={<Protected role="admin"><Courses /></Protected>} />
       <Route path="/admin/face" element={<Protected role="admin"><AdminFace /></Protected>} />
       <Route path="/admin/reports" element={<Protected role="admin"><Reports /></Protected>} />
 
@@ -108,8 +113,8 @@ export default function App() {
       <Route path="/admin/staff" element={<Protected role="admin"><StaffManagement /></Protected>} />
       <Route path="/admin/requests" element={<Protected role="admin"><AdminLayout><ApprovalRequests mode="admin" /></AdminLayout></Protected>} />
 
-      {/* Attendance terminal — teacher only */}
-      <Route path="/attendance" element={<Protected role="teacher"><Attendance /></Protected>} />
+      {/* Attendance terminal */}
+      <Route path="/attendance" element={<Attendance />} />
 
       {/* Teacher Portal */}
       <Route path="/teacher" element={<Protected role="teacher"><TeacherDashboard /></Protected>} />

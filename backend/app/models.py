@@ -61,6 +61,7 @@ class Class(Base):
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, nullable=False)
     code = Column(String, unique=True, nullable=False)
+    section = Column(String, default="")
     course_id = Column(Integer, ForeignKey("courses.id"))
     semester_id = Column(Integer, ForeignKey("semesters.id"))
     created_at = Column(DateTime, default=datetime.utcnow)
@@ -75,9 +76,11 @@ class Subject(Base):
     name = Column(String, nullable=False)
     code = Column(String, unique=True, nullable=False)
     department_id = Column(Integer, ForeignKey("departments.id"))
+    course_id = Column(Integer, ForeignKey("courses.id"), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     department = relationship("Department", back_populates="subjects")
+    course = relationship("Course")
 
 
 class Student(Base):

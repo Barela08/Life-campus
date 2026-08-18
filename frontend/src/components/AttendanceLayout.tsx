@@ -2,11 +2,13 @@ import React, { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../store/auth'
 import { useTheme } from '../store/theme'
-import { LogOut, Moon, Sun, Maximize2, Minimize2, Activity, Camera, Shield } from 'lucide-react'
+import { useBranding } from '../store/branding'
+import { LogOut, Moon, Sun, Maximize2, Minimize2, Camera, Shield } from 'lucide-react'
 
 export default function AttendanceLayout({ children }: { children: React.ReactNode }) {
   const { logout, user } = useAuth()
   const { dark, toggle } = useTheme()
+  const { systemName, systemLogo } = useBranding()
   const navigate = useNavigate()
   const [fullscreen, setFullscreen] = useState(false)
 
@@ -25,12 +27,16 @@ export default function AttendanceLayout({ children }: { children: React.ReactNo
       {/* Minimal glass top bar */}
       <div className="flex items-center justify-between px-4 sm:px-6 h-14 bg-white/70 dark:bg-gray-900/70 border-b border-gray-200/60 dark:border-gray-800/60 sticky top-0 z-30 backdrop-blur-xl">
         <div className="flex items-center gap-3">
-          <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-primary-500 via-violet-500 to-primary-600 flex items-center justify-center text-white font-bold text-sm shadow-lg shadow-primary-500/20">
-            <Camera size={18} />
-          </div>
+          {systemLogo ? (
+            <img src={systemLogo} alt={systemName} className="h-9 w-auto object-contain rounded-xl shadow-sm" />
+          ) : (
+            <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-primary-500 via-violet-500 to-primary-600 flex items-center justify-center text-white font-bold text-sm shadow-lg shadow-primary-500/20">
+              <Camera size={18} />
+            </div>
+          )}
           <div>
-            <p className="font-bold leading-tight text-sm tracking-tight">
-              LifeOS <span className="text-primary-500 dark:text-primary-400">Attendance</span>
+            <p className="font-bold leading-tight text-sm tracking-tight truncate max-w-[200px] sm:max-w-xs">
+              {systemName} <span className="text-primary-500 dark:text-primary-400 font-mono text-xs">| Attendance</span>
             </p>
             <p className="text-[10px] text-gray-500 dark:text-gray-400 uppercase tracking-widest font-medium">
               Classroom Terminal
@@ -58,6 +64,13 @@ export default function AttendanceLayout({ children }: { children: React.ReactNo
             title="Toggle Fullscreen"
           >
             {fullscreen ? <Minimize2 size={18} /> : <Maximize2 size={18} />}
+          </button>
+          <button
+            onClick={() => { localStorage.clear(); window.location.href = '/login' }}
+            className="px-2.5 py-1 rounded-xl bg-amber-500/10 text-amber-600 dark:text-amber-400 hover:bg-amber-500/20 text-xs font-semibold transition"
+            title="Reset Local Cache & Session"
+          >
+            Reset Session
           </button>
           {user && (
             <div className="flex items-center gap-2 pl-2 border-l border-gray-200 dark:border-gray-700 ml-1">

@@ -636,8 +636,8 @@ def send_attendance_updated(
 
 def test_smtp_connection() -> tuple[bool, str]:
 
-    username = _setting("SMTP_USERNAME", "")
-    password = _setting("SMTP_PASSWORD", "")
+    username = _setting("SMTP_USERNAME", "").strip()
+    password = _setting("SMTP_PASSWORD", "").strip().replace(" ", "")
 
     if not username or not password:
         return (
@@ -655,7 +655,7 @@ def test_smtp_connection() -> tuple[bool, str]:
         port = int(
             _setting(
                 "SMTP_PORT",
-                587,
+                465,
             )
         )
 
@@ -666,22 +666,20 @@ def test_smtp_connection() -> tuple[bool, str]:
             )
         )
 
-        with smtplib.SMTP(
-            host,
-            port,
-            timeout=15,
-        ) as server:
-
-            server.ehlo()
-
-            if use_tls:
-                server.starttls()
-                server.ehlo()
-
-            server.login(
-                username,
-                password,
-            )
+        if port == 465:
+            with smtplib.SMTP_SSL(host, 465, timeout=15) as server:
+                server.login(username, password)
+        else:
+            try:
+                with smtplib.SMTP(host, port, timeout=15) as server:
+                    server.ehlo()
+                    if use_tls:
+                        server.starttls()
+                        server.ehlo()
+                    server.login(username, password)
+            except Exception:
+                with smtplib.SMTP_SSL(host, 465, timeout=15) as server:
+                    server.login(username, password)
 
         return (
             True,
@@ -1354,7 +1352,7 @@ def send_attendance_marked_background(attendance_id: int) -> None:
 
         dept = student.department.name if student.department else ""
         course = student.course.name if student.course else ""
-        semester = student.semester.name if student.semester else ""
+        semester = (student.semester.name if student.semester else "") or (f"Semester {student.semester_id}" if getattr(student, "semester_id", None) else "Semester 1")
         session = record.session
         cls = record.class_name or (session.class_.name if session and session.class_ else "")
         section = session.section if session else ""

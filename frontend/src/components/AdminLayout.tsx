@@ -23,6 +23,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
 
   const navItems: NavItem[] = [
     { to: '/admin', label: 'Dashboard', icon: <LayoutDashboard size={18} /> },
+    { to: '/attendance', label: 'Attendance Terminal (Camera)', icon: <Camera size={18} /> },
     { to: '/admin/attendance', label: 'Attendance Monitor', icon: <CalendarCheck size={18} /> },
     { to: '/admin/students', label: 'Students', icon: <Users size={18} /> },
     { to: '/admin/teachers', label: 'Teachers', icon: <GraduationCap size={18} /> },

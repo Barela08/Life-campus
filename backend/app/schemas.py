@@ -165,14 +165,16 @@ class SemesterOut(BaseModel):
 # Class
 class ClassCreate(BaseModel):
     name: str
-    code: str
+    code: Optional[str] = ""
+    section: Optional[str] = ""
     course_id: int
-    semester_id: int
+    semester_id: Optional[int] = None
 
 
 class ClassUpdate(BaseModel):
     name: Optional[str] = None
     code: Optional[str] = None
+    section: Optional[str] = None
     course_id: Optional[int] = None
     semester_id: Optional[int] = None
 
@@ -181,8 +183,9 @@ class ClassOut(BaseModel):
     id: int
     name: str
     code: str
-    course_id: int
-    semester_id: int
+    section: str = ""
+    course_id: Optional[int] = None
+    semester_id: Optional[int] = None
     created_at: datetime
 
     class Config:
@@ -192,14 +195,16 @@ class ClassOut(BaseModel):
 # Subject
 class SubjectCreate(BaseModel):
     name: str
-    code: str
+    code: Optional[str] = ""
     department_id: int
+    course_id: Optional[int] = None
 
 
 class SubjectUpdate(BaseModel):
     name: Optional[str] = None
     code: Optional[str] = None
     department_id: Optional[int] = None
+    course_id: Optional[int] = None
 
 
 class SubjectOut(BaseModel):
@@ -207,6 +212,7 @@ class SubjectOut(BaseModel):
     name: str
     code: str
     department_id: int
+    course_id: Optional[int] = None
     created_at: datetime
 
     class Config:

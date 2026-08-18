@@ -66,20 +66,64 @@ def meta_departments(db: Session = Depends(get_db)):
 
 @router.get("/meta/classes")
 def meta_classes(department_id: int = None, db: Session = Depends(get_db)):
-    q = db.query(models.Class).join(models.Course).filter(models.Course.department_id == department_id) if department_id else db.query(models.Class)
-    classes = q.all()
+    if department_id:
+        classes = db.query(models.Class).join(models.Course).filter(models.Course.department_id == department_id).all()
+        # Also check direct class matches or course fallback
+        if not classes:
+            classes = db.query(models.Class).filter(models.Class.id.in_(
+                db.query(models.Student.class_id).filter(models.Student.department_id == department_id)
+            )).all()
+    else:
+        classes = db.query(models.Class).all()
     return [{"id": c.id, "name": c.name, "code": c.code} for c in classes]
 
 
 @router.get("/meta/sections")
 def meta_sections(department_id: int = None, class_id: int = None, db: Session = Depends(get_db)):
+    set_sections = set()
+    if class_id:
+        cls = db.query(models.Class).get(class_id)
+        if cls and cls.section:
+            for s in cls.section.split(","):
+                s_clean = s.strip()
+                if s_clean:
+                    set_sections.add(s_clean)
+    
     q = db.query(models.Student.section).filter(models.Student.section != "")
     if department_id:
         q = q.filter(models.Student.department_id == department_id)
     if class_id:
         q = q.filter(models.Student.class_id == class_id)
-    sections = q.distinct().all()
-    return [s[0] for s in sections]
+    for s in q.distinct().all():
+        if s[0]:
+            set_sections.add(s[0].strip())
+            
+    res = sorted(list(set_sections))
+    if not res:
+        res = ["Section A", "Section B"]
+    return res
+
+
+@router.get("/meta/subjects")
+def meta_subjects(department_id: int = None, class_id: int = None, course_id: int = None, db: Session = Depends(get_db)):
+    q = db.query(models.Subject)
+    if class_id:
+        cls = db.query(models.Class).get(class_id)
+        if cls and cls.course_id:
+            subjects = q.filter(models.Subject.course_id == cls.course_id).all()
+            return [{"id": s.id, "name": s.name, "code": s.code, "course_id": s.course_id} for s in subjects]
+        elif cls and cls.course and cls.course.department_id:
+            subjects = q.filter(models.Subject.department_id == cls.course.department_id).all()
+            return [{"id": s.id, "name": s.name, "code": s.code, "course_id": s.course_id} for s in subjects]
+    elif course_id:
+        subjects = q.filter(models.Subject.course_id == course_id).all()
+        return [{"id": s.id, "name": s.name, "code": s.code, "course_id": s.course_id} for s in subjects]
+    elif department_id:
+        subjects = q.filter(models.Subject.department_id == department_id).all()
+        return [{"id": s.id, "name": s.name, "code": s.code, "course_id": s.course_id} for s in subjects]
+    
+    subjects = q.all()
+    return [{"id": s.id, "name": s.name, "code": s.code, "course_id": s.course_id} for s in subjects]
 
 
 @router.post("/start")
@@ -116,8 +160,6 @@ def start_session(req: schemas.StartSessionRequest,
             req.section = teacher.section
     if subject_id:
         subject = db.get(models.Subject, subject_id)
-        if not subject or subject.department_id != req.department_id:
-            raise HTTPException(status_code=422, detail="Subject does not belong to the selected department")
 
     session = models.AttendanceSession(
         teacher_id=teacher.id, department_id=req.department_id,

@@ -1,6 +1,7 @@
  import React, { useEffect, useRef, useState, useCallback } from 'react'
 import api from '../../lib/api'
 import { useAuth } from '../../store/auth'
+import { useBranding } from '../../store/branding'
 import AttendanceLayout from '../../components/AttendanceLayout'
 import { Badge } from '../../components/ui'
 import toast from 'react-hot-toast'
@@ -9,7 +10,7 @@ import {
   Video, Wifi, ScanFace, CheckCircle2, XCircle, Loader, Monitor, LogIn,
   Maximize2, Minimize2, CameraOff, WifiOff, Signal, ChevronDown, User,
   Fingerprint, Calendar, Clock, Ban, Shield, AlertCircle, CheckCircle,
-  Activity, Layers, ArrowLeft, RotateCcw, Eye, EyeOff
+  Activity, Layers, ArrowLeft, RotateCcw, Eye, EyeOff, BookOpen
 } from 'lucide-react'
 import { cameraService, CameraState } from '../../lib/camera'
 
@@ -30,12 +31,15 @@ function DebugRow({ label, value, good }: { label: string; value: string; good?:
 
 export default function Attendance() {
   const { user, login: authLogin } = useAuth()
+  const { systemName, systemLogo } = useBranding()
   const [departments, setDepartments] = useState<any[]>([])
   const [classes, setClasses] = useState<any[]>([])
   const [sections, setSections] = useState<string[]>([])
+  const [subjects, setSubjects] = useState<any[]>([])
   const [departmentId, setDepartmentId] = useState('')
   const [classId, setClassId] = useState('')
   const [section, setSection] = useState('')
+  const [subjectId, setSubjectId] = useState('')
   const [sessionId, setSessionId] = useState<number | null>(null)
   const [sessionStatus, setSessionStatus] = useState('')
   const [records, setRecords] = useState<any[]>([])
@@ -138,7 +142,7 @@ const videoRef = useRef<HTMLVideoElement>(null)
     setLoading(true)
     try {
       const [d] = await Promise.all([api.get('/attendance/meta/departments')])
-      setDepartments(d.data)
+      setDepartments(Array.isArray(d.data) ? d.data : [])
     } catch { toast.error('Failed to load') } finally { setLoading(false) }
   }
   useEffect(() => { load() }, [])
@@ -155,20 +159,39 @@ const videoRef = useRef<HTMLVideoElement>(null)
     }).catch(() => {})
   }, [user?.id, user?.role])
 
-  // Load classes when department changes
+  // Load classes when department changes (or load all classes)
   useEffect(() => {
-    if (!departmentId) { setClasses([]); return }
-    api.get('/attendance/meta/classes', { params: { department_id: +departmentId } })
-      .then(r => setClasses(r.data))
-      .catch(() => {})
+    const params = departmentId ? { department_id: +departmentId } : {}
+    api.get('/attendance/meta/classes', { params })
+      .then(r => setClasses(Array.isArray(r.data) ? r.data : []))
+      .catch(() => setClasses([]))
   }, [departmentId])
 
   // Load sections when department/class changes
   useEffect(() => {
-    if (!departmentId || !classId) { setSections([]); return }
-    api.get('/attendance/meta/sections', { params: { department_id: +departmentId, class_id: +classId } })
-      .then(r => setSections(r.data))
-      .catch(() => {})
+    const params: any = {}
+    if (departmentId) params.department_id = +departmentId
+    if (classId) params.class_id = +classId
+    api.get('/attendance/meta/sections', { params })
+      .then(r => setSections(Array.isArray(r.data) ? r.data : []))
+      .catch(() => setSections([]))
+  }, [departmentId, classId])
+
+  // Load subjects ONLY when department or class is selected
+  useEffect(() => {
+    if (!classId && !departmentId) {
+      setSubjects([])
+      return
+    }
+    const params: any = {}
+    if (classId) {
+      params.class_id = +classId
+    } else if (departmentId) {
+      params.department_id = +departmentId
+    }
+    api.get('/attendance/meta/subjects', { params })
+      .then(r => setSubjects(Array.isArray(r.data) ? r.data : []))
+      .catch(() => setSubjects([]))
   }, [departmentId, classId])
 
   // ---- Camera management (delegates to shared cameraService) ----
@@ -345,7 +368,7 @@ const videoRef = useRef<HTMLVideoElement>(null)
   // ---- Session ----
   const startSession = async () => {
     if (!departmentId || !classId) { toast.error('Select department and class'); return }
-    if (user?.role !== 'teacher') {
+    if (!user) {
       pendingStartRef.current = true
       setShowLogin(true)
       return
@@ -359,6 +382,7 @@ const videoRef = useRef<HTMLVideoElement>(null)
         department_id: +departmentId,
         class_id: +classId,
         section: section || '',
+        subject_id: subjectId ? +subjectId : undefined,
         camera_id: 'attendance-terminal'
       })
       setSessionId(res.data.session_id)
@@ -627,10 +651,16 @@ const videoRef = useRef<HTMLVideoElement>(null)
         <div className="min-h-[calc(100vh-3.5rem)] flex items-center justify-center p-4">
           <div className="w-full max-w-lg animate-slide-up">
             <div className="text-center mb-8">
-              <div className="inline-flex items-center justify-center w-20 h-20 rounded-3xl bg-gradient-to-br from-primary-500 via-violet-500 to-primary-600 shadow-2xl shadow-primary-500/30 mb-5">
-                <Camera className="text-white" size={36} />
+              <div className="inline-flex items-center justify-center w-24 h-24 rounded-3xl bg-white dark:bg-gray-900 border-2 border-primary-500/30 shadow-2xl shadow-primary-500/20 mb-5 overflow-hidden p-3">
+                {systemLogo ? (
+                  <img src={systemLogo} alt={systemName} className="w-full h-full object-contain rounded-2xl" />
+                ) : (
+                  <div className="w-full h-full rounded-2xl bg-gradient-to-br from-primary-500 to-primary-700 flex items-center justify-center text-white">
+                    <Camera size={36} />
+                  </div>
+                )}
               </div>
-              <h1 className="text-3xl font-bold tracking-tight">Attendance Terminal</h1>
+              <h1 className="text-3xl font-bold tracking-tight">{systemName || 'Attendance Terminal'}</h1>
               <p className="text-gray-500 dark:text-gray-400 mt-2 text-sm max-w-sm mx-auto leading-relaxed">
                 AI-powered face recognition attendance system. Select your class and start scanning.
               </p>
@@ -638,6 +668,7 @@ const videoRef = useRef<HTMLVideoElement>(null)
 
             <div className="bg-white dark:bg-gray-900 rounded-3xl shadow-2xl border border-gray-200 dark:border-gray-800 overflow-hidden">
               <div className="p-6 space-y-5">
+                {/* 1. Department */}
                 <div>
                   <label className="label text-sm font-semibold flex items-center gap-2">
                     <Layers size={14} className="text-primary-500" /> Department
@@ -645,48 +676,116 @@ const videoRef = useRef<HTMLVideoElement>(null)
                   <select
                     className="input"
                     value={departmentId}
-                    onChange={e => { setDepartmentId(e.target.value); setClassId(''); setSection('') }}
+                    onChange={e => {
+                      setDepartmentId(e.target.value)
+                      setClassId('')
+                      setSection('')
+                      setSubjectId('')
+                    }}
                   >
-                    <option value="">Select department</option>
-                    {departments.map(d => (
+                    <option value="">Select Department</option>
+                    {(departments || []).map(d => (
                       <option key={d.id} value={d.id}>{d.name}</option>
                     ))}
                   </select>
                 </div>
 
+                {/* 2. Class (Unlocked when Department selected) */}
                 <div>
                   <label className="label text-sm font-semibold flex items-center gap-2">
                     <Monitor size={14} className="text-primary-500" /> Class
                   </label>
                   <select
-                    className="input"
+                    className="input disabled:opacity-50 disabled:cursor-not-allowed"
                     value={classId}
-                    onChange={e => { setClassId(e.target.value); setSection('') }}
                     disabled={!departmentId}
+                    onChange={e => {
+                      setClassId(e.target.value)
+                      setSection('')
+                      setSubjectId('')
+                    }}
                   >
-                    <option value="">{departmentId ? 'Select class' : 'Select department first'}</option>
-                    {classes.map(c => (
+                    <option value="">
+                      {!departmentId ? '🔒 Select Department first' : 'Select Class'}
+                    </option>
+                    {(classes || []).map(c => (
                       <option key={c.id} value={c.id}>{c.name}</option>
                     ))}
                   </select>
                 </div>
 
+                {/* 3. Section (Unlocked when Class selected) */}
                 <div>
                   <label className="label text-sm font-semibold flex items-center gap-2">
                     <Users size={14} className="text-primary-500" /> Section
                   </label>
                   <select
-                    className="input"
+                    className="input disabled:opacity-50 disabled:cursor-not-allowed"
                     value={section}
-                    onChange={e => setSection(e.target.value)}
                     disabled={!classId}
+                    onChange={e => setSection(e.target.value)}
                   >
-                    <option value="">{classId ? 'Select section (optional)' : 'Select class first'}</option>
-                    {sections.map(s => (
+                    <option value="">
+                      {!classId ? '🔒 Select Class first' : 'Select Section (optional)'}
+                    </option>
+                    {(sections || []).map(s => (
                       <option key={s} value={s}>{s}</option>
                     ))}
                   </select>
                 </div>
+
+                {/* 4. Subject Selection (Unlocked ONLY when Department & Class are selected) */}
+                {departmentId && classId ? (
+                  <div className="p-4 rounded-2xl bg-gray-50 dark:bg-gray-800/60 border border-gray-200/60 dark:border-gray-700/60 space-y-3">
+                    <label className="label text-sm font-semibold flex items-center justify-between">
+                      <span className="flex items-center gap-2">
+                        <BookOpen size={14} className="text-primary-500" /> Subject
+                      </span>
+                      <span className="text-xs text-gray-400 font-normal">Select 1, 2, or All Subjects</span>
+                    </label>
+                    <select
+                      className="input"
+                      value={subjectId}
+                      onChange={e => setSubjectId(e.target.value)}
+                    >
+                      <option value="">All Subjects (General Session)</option>
+                      {(subjects || []).map(s => (
+                        <option key={s.id} value={s.id}>{s.name} ({s.code})</option>
+                      ))}
+                    </select>
+                    <div className="flex gap-1.5 mt-2 flex-wrap text-xs">
+                      <button
+                        type="button"
+                        onClick={() => setSubjectId('')}
+                        className={`px-3 py-1.5 rounded-xl border transition-all font-semibold ${
+                          !subjectId
+                            ? 'bg-primary-600 text-white border-primary-600 shadow-md shadow-primary-600/20 scale-[1.02]'
+                            : 'bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300 border-transparent hover:bg-gray-200'
+                        }`}
+                      >
+                        All Subjects
+                      </button>
+                      {(subjects || []).map(s => (
+                        <button
+                          key={s.id}
+                          type="button"
+                          onClick={() => setSubjectId(String(s.id))}
+                          className={`px-3 py-1.5 rounded-xl border transition-all font-semibold ${
+                            subjectId === String(s.id)
+                              ? 'bg-primary-600 text-white border-primary-600 shadow-md shadow-primary-600/20 scale-[1.02]'
+                              : 'bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300 border-transparent hover:bg-gray-200'
+                          }`}
+                        >
+                          {s.name}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="p-3 text-center text-xs text-gray-400 dark:text-gray-500 bg-gray-50/50 dark:bg-gray-800/30 rounded-2xl border border-dashed border-gray-200 dark:border-gray-800">
+                    🔒 Select Department & Class to unlock Subjects
+                  </div>
+                )}
 
                 <button
                   onClick={startSession}
@@ -863,6 +962,17 @@ const videoRef = useRef<HTMLVideoElement>(null)
                     {sessionStatus === 'active' ? 'Live' : 'Closed'}
                   </Badge>
                 </div>
+
+                {/* System Logo Branding Badge on top of camera */}
+                <div className="absolute top-4 left-1/2 -translate-x-1/2 bg-black/60 backdrop-blur-md px-3.5 py-1.5 rounded-full border border-white/20 flex items-center gap-2 shadow-lg z-20 pointer-events-none">
+                  {systemLogo ? (
+                    <img src={systemLogo} alt="Logo" className="h-5 w-auto object-contain" />
+                  ) : (
+                    <Camera size={14} className="text-emerald-400" />
+                  )}
+                  <span className="text-xs font-bold tracking-wide text-white font-mono">{systemName}</span>
+                </div>
+
                 {/* Fullscreen button */}
                 <button
                   onClick={toggleFullscreen}
