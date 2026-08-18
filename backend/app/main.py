@@ -194,7 +194,11 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title=settings.APP_NAME, lifespan=lifespan)
 
-cors_origins = list(set(settings.CORS_ORIGINS + ["http://localhost:5173", "http://127.0.0.1:5173"]))
+cors_origins = list(set(settings.CORS_ORIGINS + [
+    "http://localhost:5173", 
+    "http://127.0.0.1:5173",
+    "https://life-campus-ruby.vercel.app"
+]))
 
 app.add_middleware(
     CORSMiddleware,
